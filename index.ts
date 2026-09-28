@@ -36,6 +36,7 @@ import {
 	shapeZenPayload,
 	validateFreeModelsFile,
 	validOpencodeVersion,
+	ZEN_PROVIDER_ID,
 } from "./shared.js";
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -96,7 +97,7 @@ import {
 // never be called, the same cloak 9router ships (see ensureZenFreeTierShape in
 // shared.ts, verified against the live endpoint).
 
-const PROVIDER_ID = "pi-zen";
+const PROVIDER_ID = ZEN_PROVIDER_ID;
 const PROVIDER_NAME = "OpenCode Zen (Free)";
 // Sent when no key is configured: what the opencode CLI sends while signed out.
 // Zen treats it as "no credential" → anonymous free-tier access (IP rate limited).
@@ -557,6 +558,25 @@ async function resolveModels(): Promise<ZenModelConfig[]> {
 }
 
 /**
+ * The best model list available without the network, best source first:
+ * in-memory last-good, then the disk snapshot, then the snapshot bundled with
+ * the extension.
+ *
+ * SYNC BY CONTRACT. pi picks a session's model at createAgentSession time and
+ * does not await this extension's async factory, so the provider has to be
+ * registered before any network fetch resolves. Every source here is a
+ * readFileSync — keep it that way, and keep the chain here. Both callers use
+ * this function so source priority cannot drift between them.
+ */
+function knownModelsSync(): ZenModelConfig[] {
+	if (lastGood && lastGood.length > 0) return lastGood;
+	// First-ever run offline: the disk snapshot is empty. Fall back to the
+	// free-models.snapshot.json that ships with the extension.
+	const disk = readSnapshot();
+	return disk.length > 0 ? disk : readBundledSnapshot();
+}
+
+/**
  * The module's interface: never throws. Falls back to the last fully-resolved
  * set (in-memory, else the disk snapshot, else the bundled snapshot),
  * else an empty list.
@@ -569,14 +589,7 @@ async function resolveOrRecover(): Promise<ZenModelConfig[]> {
 			`${PROVIDER_ID}: resolution failed (${err instanceof Error ? err.message : String(err)}); using last-known-good`,
 		);
 	}
-	if (!lastGood) {
-		lastGood = readSnapshot();
-	}
-	// First-ever run offline: the disk snapshot is empty. Try the bundled
-	// free-models.snapshot.json that ships with the extension.
-	if (lastGood.length === 0) {
-		lastGood = readBundledSnapshot();
-	}
+	lastGood = knownModelsSync();
 	return lastGood;
 }
 
@@ -632,50 +645,6 @@ function applyFreeModelsIfChanged(pi: ExtensionAPI, knownAt: number): boolean {
 	lastGood = configs;
 	writeSnapshot(configs);
 	return true;
-}
-
-// ─── Model Restore ───────────────────────────────────────────────────────────
-//
-// pi picks the session's model (createAgentSession) while extension factories
-// are still loading — ours awaits network fetches, so the pi-zen models are
-// not yet visible when pi resolves. A pi-zen model the user CHOSE (`--model`
-// on the CLI, `/model` in the TUI, or a resumed session) can therefore be
-// silently dropped in favor of the first authenticated native model.
-//
-// The session file records every model_change, so on session_start
-// (post-registration) we re-apply whichever pi-zen model the branch actually
-// recorded — the same last-recorded rule pi itself uses
-// (getSessionContextSettings). Nothing is invented: no settings.json writes,
-// no free-models.json `defaultModel`, no hard-coded fallback. If the branch
-// doesn't name a pi-zen model, pi's own resolution (which already honors the
-// user's configured default provider) is left untouched.
-
-async function restoreIntendedModel(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
-	try {
-		// Honor the pi-zen model the branch actually recorded — the last
-		// model_change / assistant message. We only ever RESTORE what the
-		// record names; there is no default to re-impose.
-		const branch = ctx.sessionManager.getBranch();
-		let fromSession: { provider: string; modelId: string } | null = null;
-		for (const entry of branch) {
-			if (entry.type === "model_change") {
-				fromSession = { provider: entry.provider, modelId: entry.modelId };
-			} else if (entry.type === "message" && entry.message.role === "assistant") {
-				const { provider, model } = entry.message;
-				if (provider && model) fromSession = { provider, modelId: model };
-			}
-		}
-		const intended = fromSession;
-		if (!intended || intended.provider !== PROVIDER_ID) return;
-
-		const current = ctx.model;
-		if (current?.provider === PROVIDER_ID && current.id === intended.modelId) return;
-
-		const model = ctx.modelRegistry.find(PROVIDER_ID, intended.modelId);
-		if (model) await pi.setModel(model);
-	} catch {
-		// Best-effort repair — never block session startup.
-	}
 }
 
 // ─── Error UX ───────────────────────────────────────────────────────────────
@@ -823,8 +792,24 @@ function zenCompactionStreamFn(sessionId: string, authHeaders: ProviderHeaders |
 // ─── Extension Entry ─────────────────────────────────────────────────────────
 
 export default async function (pi: ExtensionAPI) {
-	// Register provider eagerly in the factory (awaited) so models are available
-	// before session_start / model restore runs.
+	// Register SYNCHRONOUSLY, before the first await.
+	//
+	// pi picks a session's model at createAgentSession time, and it does not
+	// await an async extension factory. A registration that sits behind a
+	// network fetch is therefore invisible to that resolution, and a session
+	// that asked for a Zen model gets dropped onto the first authenticated
+	// native model instead. That used to need a session_start repair, which
+	// could not tell a resumed Zen session from a delegated child carrying its
+	// parent's branch — it broke pi-subagents children (they reported 'big-
+	// pickle' instead of their launch model).
+	//
+	// The model list never requires the network — see knownModelsSync, which
+	// owns the source order and is sync by contract. Register from it, then
+	// let the refresh below replace the list if the live one differs.
+	// Registration is idempotent: refreshAndRegister makes the same call.
+	registerProvider(pi, knownModelsSync());
+
+	// Refresh from the network. Replaces the seed if the live list differs.
 	await refreshAndRegister(pi);
 
 	// ─── Events ──────────────────────────────────────────────────────────────
@@ -855,10 +840,6 @@ export default async function (pi: ExtensionAPI) {
 		const count = await refreshAndRegister(pi);
 		if (freeModelsRevalidate) await freeModelsRevalidate;
 		applyFreeModelsIfChanged(pi, knownAt);
-
-		// Re-apply the pi-zen model the session recorded — pi's own resolve ran
-		// before our provider registered. See Model Restore note above.
-		await restoreIntendedModel(pi, ctx);
 
 		if (!ctx.hasUI) return;
 

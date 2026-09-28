@@ -13,6 +13,14 @@
 
 import { createHash } from "node:crypto";
 
+// ─── Provider identity ───────────────────────────────────────────────────────
+
+/**
+ * The provider id this extension registers. Lives here rather than in index.ts
+ * so registration and every provider-id comparison agree on one constant.
+ */
+export const ZEN_PROVIDER_ID = "pi-zen";
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 /** pi API families Zen serves. Determines which endpoint/model config pi uses. */
