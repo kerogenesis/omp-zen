@@ -818,6 +818,11 @@ export default async function (pi: ExtensionAPI) {
 	// unchanged list costs a body-less 304 — and only a REAL list change
 	// re-registers the provider (see applyFreeModelsIfChanged). A tick with a
 	// still-fresh cache (a recent session_start refreshed the timer) is a no-op.
+	//
+	// unref(): this timer must never pin the process open. Non-interactive runs
+	// (`pi -p`, and anything driving pi as a subprocess) pick a model and exit;
+	// an un-unref'd interval keeps Node's event loop alive, so the run answers
+	// and then hangs forever instead of returning its output.
 	setInterval(() => {
 		if (freeModelsCache && freeModelsCache.expiresAt > Date.now()) return;
 		const knownAt = freeModelsUpdatedAt;
@@ -828,7 +833,7 @@ export default async function (pi: ExtensionAPI) {
 			.catch(() => {
 				// revalidateFreeModels resolves on all paths; kept for safety.
 			});
-	}, FREE_MODELS_CDN_TTL_MS * 2);
+	}, FREE_MODELS_CDN_TTL_MS * 2).unref();
 
 	// Re-register on session_start (reload/new/fork). A stale cache serves
 	// instantly and kicks the shared background revalidation; join that
