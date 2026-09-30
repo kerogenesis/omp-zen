@@ -1,10 +1,3 @@
-/**
- * Unit tests for the Zen free-tier request-shaping module (shared.ts).
- * Runs with `node --test` — Node >= 22.18 strips types natively, so no
- * build step or test framework is needed. These cross exactly the same seam
- * callers use (ensureZenFreeTierShape / sanitizeZenResponsesItems) and pin the
- * behavior verified live against opencode.ai/zen/v1 (Sep 2026).
- */
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
@@ -16,7 +9,6 @@ import {
 
 type JsonObj = Record<string, any>;
 
-/** Tool names present in a payload, across both wire wrappers. */
 function toolNamesOf(payload: JsonObj): string[] {
 	return (payload.tools as unknown[])
 		.map((t) => {
@@ -172,8 +164,7 @@ test("the decoy name constant is exactly bash + read", () => {
 	assert.deepEqual(ZEN_FREE_TIER_DECOY_TOOL_NAMES, ["bash", "read"]);
 });
 
-// ─── shapeZenPayload (compaction path) ──────────────────────────────────────
-//
+
 // pi's compaction requests bypass before_provider_request (no onPayload on
 // that path), so the session_before_compact handler shapes its own payload
 // through this helper. These tests pin the two things it layers on top of
@@ -202,11 +193,11 @@ test("shapeZenPayload: strips pi cache fields then stands in decoys", () => {
 	assert.strictEqual(result!.payload, payload);
 });
 
-test("shapeZenPayload: unknown model id defaults to the chat shape", () => {
+test("shapeZenPayload: unknown model id returns undefined untouched", () => {
 	const payload: JsonObj = { model: "some-unregistered-model", messages: [], stream: true };
 	const result = shapeZenPayload(payload, { get: () => undefined });
-	assert.notEqual(result, undefined);
-	assert.deepEqual(toolNamesOf(payload), ["bash", "read"]);
+	assert.strictEqual(result, undefined);
+	assert.strictEqual(payload.tools, undefined);
 });
 
 test("shapeZenPayload: complete real tools pass through with cache fields still stripped", () => {

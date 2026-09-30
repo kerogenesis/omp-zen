@@ -1,17 +1,27 @@
 {
-  "name": "pi-zen",
+  "name": "omp-zen",
   "version": "0.1.0",
-  "description": "OpenCode Zen free models for pi",
+  "description": "OpenCode Zen free models for oh-my-pi (omp) and pi",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kerogenesis/omp-zen.git"
+  },
   "keywords": [
     "pi-package",
     "pi-extension",
+    "omp-extension",
+    "oh-my-pi",
     "opencode-zen"
   ],
   "files": [
     "index.ts",
     "shared.ts",
+    "identity.ts",
+    "models.ts",
+    "errors.ts",
+    "compaction.ts",
     "free-models.json",
     "free-models.schema.json",
     "README.md",

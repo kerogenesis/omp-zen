@@ -1,24 +1,9 @@
-/**
- * Regression guard for the headless-exit bug.
- *
- * An interval that is never unref'd pins Node's event loop, so `pi -p` prints
- * its answer and then hangs forever rather than exiting. That is exactly how
- * pi-zen broke every non-interactive caller — including `fieldtheory classify
- * --engine pi`, where the child produced valid output and was then killed on
- * timeout, so classification failed 100% of the time.
- *
- * This asserts on the source text rather than importing index.ts: index.ts
- * imports "./shared.js", which only pi's loader resolves, so a plain
- * `node --test` process cannot import it. The invariant is narrow enough that
- * checking the source is honest — and it costs no network or subprocess.
- */
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const source = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
 
-/** Index just past the `setInterval(...)` call whose opening paren is at `open`. */
 function callEnd(src: string, open: number): number {
 	let depth = 0;
 	for (let i = open; i < src.length; i += 1) {

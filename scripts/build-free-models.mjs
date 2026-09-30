@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /**
- * build-free-models.mjs
  *
  * Fetches the opencode.ai Zen docs table, identifies the free models,
  * enriches them with metadata from models.dev, and writes free-models.json.
@@ -22,19 +21,17 @@ import { join } from "node:path";
 
 const DOCS_URL = "https://opencode.ai/docs/zen";
 const MODELS_DEV_URL = "https://models.dev/api.json";
-// Registry (not the GitHub API) so the Action needs no token and no rate budget.
 const OPENCODE_NPM_URL = "https://registry.npmjs.org/opencode-ai/latest";
 const FETCH_TIMEOUT_MS = 15_000;
 
-// Docs endpoint → pi api family. Free models are not all OpenAI-compatible:
-// stealth models can be served over Anthropic Messages or the Responses API.
+// Docs endpoint → pi api family.
+// Free models are not all OpenAI-compatible
 const API_BY_ENDPOINT = [
 	{ pattern: /:stream?[gG]enerateContent/, api: "google-generative-ai" },
 	{ pattern: /\/responses\/?$/, api: "openai-responses" },
 	{ pattern: /\/messages\/?$/, api: "anthropic-messages" },
 ];
 
-/** pi's api for a Zen endpoint; the OpenAI-compatible chat route is the default. */
 function apiForEndpoint(endpoint) {
 	for (const { pattern, api } of API_BY_ENDPOINT) {
 		if (pattern.test(endpoint ?? "")) return api;
@@ -52,23 +49,16 @@ const outDir = outIdx !== -1 ? args[outIdx + 1] : ".";
 const overridesIdx = args.indexOf("--overrides");
 const overridesPath = overridesIdx !== -1 ? args[overridesIdx + 1] : null;
 
-// ─── YAML Parser (minimal) ───────────────────────────────────────────────────
-//
-// Just enough to parse overrides.yml:
-//   key: value
-//   key:
-//     - item1
-//     - item2
+// ─── YAML Parser ─────────────────────────────────────────────────────────────
 
 function parseSimpleYaml(text) {
 	const result = {};
 	let currentKey = null;
 
 	for (const rawLine of text.split("\n")) {
-		const line = rawLine.replace(/#.*$/, "").trim(); // strip comments
+		const line = rawLine.replace(/#.*$/, "").trim();
 		if (!line) continue;
 
-		// List item: "  - value" (indented with dash)
 		const listMatch = line.match(/^\s*-\s+(.+)$/);
 		if (listMatch && currentKey) {
 			if (!Array.isArray(result[currentKey])) result[currentKey] = [];
@@ -76,7 +66,6 @@ function parseSimpleYaml(text) {
 			continue;
 		}
 
-		// Key-value: "key: value" or "key:" (start of list)
 		const kvMatch = line.match(/^(\w+):\s*(.*)$/);
 		if (kvMatch) {
 			currentKey = kvMatch[1];
@@ -128,7 +117,7 @@ async function fetchJSON(url) {
 	return res.json();
 }
 
-// ─── Step 1: Parse the docs table ────────────────────────────────────────────
+// ─── Parse the docs table ────────────────────────────────────────────
 
 /**
  * Accept a row only when its endpoint cell is actually a URL. The docs table
@@ -174,7 +163,7 @@ function stripTags(html) {
 	return html.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 }
 
-// ─── Step 2: Identify free models ─────────────────────────────────────────────
+// ─── Identify free models ─────────────────────────────────────────────
 
 /**
  * Zen marks free models in two ways: a `-free` id suffix (the normal case) or
@@ -190,27 +179,20 @@ function isFreeModel(entry) {
 	return /(^|\s)free$/i.test(entry.name ?? "");
 }
 
-/**
- * Free models verified live against the Zen gateway (200 + streamed turn) but
- * not yet listed in the opencode.ai/zen docs table — so the docs scrape above
- * can't see them. Pinned here so the 6-hourly CI rebuild keeps them; delete an
- * entry when the docs table adds it. Endpoints stay explicit.
- *
- * Verified additions (probed 2026-09-20):
- *   - muse-spark-1.2-contributor-free → openai-responses (muse family, same
- *     shape as muse-spark-1.3-contributor-free).
- * Note: deepseek-v4-flash-free worked in earlier probes but returned 400
- * "Model is unavailable" on re-verification — left out until it's stable.
- */
 const KNOWN_FREE_ALIASES = [
 	{
 		id: "muse-spark-1.2-contributor-free",
 		name: "Muse Spark 1.2 Free",
 		endpoint: "https://opencode.ai/zen/v1/responses",
 	},
+	{
+		id: "muse-spark-1.3-contributor-free",
+		name: "Muse Spark 1.3 Free",
+		endpoint: "https://opencode.ai/zen/v1/responses",
+	},
 ];
 
-// ─── Step 3: Enrich with models.dev metadata ─────────────────────────────────
+// ─── Enrich with models.dev metadata ─────────────────────────────────
 
 function enrichWithMetadata(freeIds, devSlice) {
 	const models = [];
@@ -233,10 +215,6 @@ function enrichWithMetadata(freeIds, devSlice) {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: typeof context === "number" && context > 0 ? context : 128_000,
 			maxTokens: typeof output === "number" && output > 0 ? output : 8_192,
-			// Compat is family-aware: these flags describe the OpenAI-completions
-			// wire (maxTokensField names the max-tokens field, store/developer/
-			// usage flags gate completions-only params). Other families ship an
-			// empty block — pi-ai applies its own per-key defaults there.
 			compat:
 				api === "openai-completions"
 					? {
@@ -256,7 +234,7 @@ function enrichWithMetadata(freeIds, devSlice) {
 	return models;
 }
 
-// ─── Shared helpers (mirrored from index.ts for standalone use) ───────────────
+// ─── Shared helpers  ───────────────
 
 function humanize(id) {
 	return id
@@ -325,58 +303,52 @@ async function main() {
 	// Load overrides
 	const overrides = loadOverrides(overridesPath);
 	if (overrides.defaultModel) {
-		console.error(`📋 Overrides: defaultModel=${overrides.defaultModel}`);
+		console.error(` Overrides: defaultModel=${overrides.defaultModel}`);
 	}
 	if (overrides.disabledModels.length > 0) {
-		console.error(`📋 Overrides: disabled=${overrides.disabledModels.join(", ")}`);
+		console.error(`Overrides: disabled=${overrides.disabledModels.join(", ")}`);
 	}
 
-	console.error("⏳ Fetching opencode.ai docs...");
+	console.error("Fetching opencode.ai docs...");
 	const docsHtml = await fetchText(DOCS_URL);
 	const allModels = parseDocsTable(docsHtml);
-	console.error(`📋 Found ${allModels.length} models in docs table`);
+	console.error(`Found ${allModels.length} models in docs table`);
 
-	// Identify free models: -free suffix or big-pickle
 	const freeModels = allModels.filter(isFreeModel);
-	console.error(`🆓 Identified ${freeModels.length} free models`);
+	console.error(`Identified ${freeModels.length} free models`);
 
-	// Merge verified-but-undocumented aliases (deduped against the docs rows).
 	const added = KNOWN_FREE_ALIASES.filter((k) => !freeModels.some((f) => f.id === k.id));
 	if (added.length > 0) {
 		freeModels.push(...added);
-		console.error(`✅ Added ${added.length} verified undocumented free model(s)`);
+		console.error(`Added ${added.length} verified undocumented free model(s)`);
 	}
 
 	if (freeModels.length === 0) {
-		console.error("⚠️  No free models found — docs format may have changed");
+		console.error("No free models found — docs format may have changed");
 		process.exit(1);
 	}
 
-	// Latest opencode release — the extension copies this into its User-Agent so
-	// the header keeps matching a current opencode build without a reinstall.
 	let opencodeVersion;
 	try {
 		const pkg = await fetchJSON(OPENCODE_NPM_URL);
 		if (typeof pkg?.version === "string" && pkg.version) {
 			opencodeVersion = pkg.version;
-			console.error(`🔢 Latest opencode: ${opencodeVersion}`);
+			console.error(`Latest opencode: ${opencodeVersion}`);
 		}
 	} catch (err) {
-		console.error(`⚠️  opencode version lookup failed: ${err.message} — omitting`);
+		console.error(`opencode version lookup failed: ${err.message} — omitting`);
 	}
 
-	// Fetch models.dev for metadata enrichment
-	console.error("⏳ Fetching models.dev metadata...");
+	console.error("Fetching models.dev metadata...");
 	let devSlice = {};
 	try {
 		const devJson = await fetchJSON(MODELS_DEV_URL);
 		devSlice = devJson?.opencode?.models ?? {};
-		console.error(`📦 Got metadata for ${Object.keys(devSlice).length} models from models.dev`);
+		console.error(`Got metadata for ${Object.keys(devSlice).length} models from models.dev`);
 	} catch (err) {
-		console.error(`⚠️  models.dev fetch failed: ${err.message} — using defaults`);
+		console.error(`models.dev fetch failed: ${err.message} — using defaults`);
 	}
 
-	// Build the output
 	let enriched = enrichWithMetadata(freeModels, devSlice);
 
 	// Apply disabled models from overrides
@@ -384,12 +356,11 @@ async function main() {
 		const disabledSet = new Set(overrides.disabledModels);
 		const before = enriched.length;
 		enriched = enriched.filter((m) => !disabledSet.has(m.id));
-		console.error(`🚫 Disabled ${before - enriched.length} model(s)`);
+		console.error(`Disabled ${before - enriched.length} model(s)`);
 	}
 
-	// Resolve defaultModel: overrides > auto-compute
 	const defaultModel = overrides.defaultModel || pickDefaultModel(enriched);
-	console.error(`🎯 Default model: ${defaultModel}`);
+	console.error(`Default model: ${defaultModel}`);
 
 	const output = {
 		$schema: "./free-models.schema.json",
@@ -401,7 +372,6 @@ async function main() {
 		models: enriched,
 	};
 
-	// Write or print
 	const json = pretty ? JSON.stringify(output, null, "\t") : JSON.stringify(output);
 
 	if (dryRun) {
@@ -409,7 +379,7 @@ async function main() {
 	} else {
 		const outPath = join(outDir, "free-models.json");
 		writeFileSync(outPath, json + "\n");
-		console.error(`✅ Wrote ${outPath} (${enriched.length} models)`);
+		console.error(`Wrote ${outPath} (${enriched.length} models)`);
 	}
 }
 
