@@ -12,5 +12,5 @@
     "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["index.ts", "shared.ts", "tests/**/*.ts"]
+  "include": ["index.ts", "shared.ts", "models.ts", "identity.ts", "errors.ts", "compaction.ts"]
 }

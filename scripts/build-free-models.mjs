@@ -16,6 +16,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { apiForEndpoint } from "./zen-endpoints.mjs";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -23,21 +24,6 @@ const DOCS_URL = "https://opencode.ai/docs/zen";
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const OPENCODE_NPM_URL = "https://registry.npmjs.org/opencode-ai/latest";
 const FETCH_TIMEOUT_MS = 15_000;
-
-// Docs endpoint → pi api family.
-// Free models are not all OpenAI-compatible
-const API_BY_ENDPOINT = [
-	{ pattern: /:stream?[gG]enerateContent/, api: "google-generative-ai" },
-	{ pattern: /\/responses\/?$/, api: "openai-responses" },
-	{ pattern: /\/messages\/?$/, api: "anthropic-messages" },
-];
-
-function apiForEndpoint(endpoint) {
-	for (const { pattern, api } of API_BY_ENDPOINT) {
-		if (pattern.test(endpoint ?? "")) return api;
-	}
-	return "openai-completions";
-}
 
 // ─── Args ────────────────────────────────────────────────────────────────────
 
@@ -203,12 +189,13 @@ function enrichWithMetadata(freeIds, devSlice) {
 		const context = meta?.limit?.context;
 		const output = meta?.limit?.output;
 		const hasImage = Array.isArray(meta?.modalities?.input) && meta.modalities.input.includes("image");
-		const api = apiForEndpoint(entry.endpoint);
+		const api = apiForEndpoint(entry.endpoint, entry.id);
 
 		models.push({
 			id: entry.id,
 			name: meta?.name || entry.name || humanize(entry.id),
 			api,
+			endpoint: entry.endpoint,
 			reasoning,
 			thinkingLevelMap: buildThinkingLevelMap(meta),
 			input: hasImage ? ["text", "image"] : ["text"],

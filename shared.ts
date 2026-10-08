@@ -25,19 +25,28 @@ export {
 
 export const ZEN_PROVIDER_ID = "pi-zen";
 
-/** API families supported by OpenCode Zen. */
 export type ModelApi =
 	| "openai-completions"
 	| "openai-responses"
 	| "anthropic-messages"
-	| "google-generative-ai";
+	| "google-generative-ai"
+	| "systemone";
 
-export const MODEL_APIS: ReadonlySet<string> = new Set<ModelApi>([
-	"openai-completions",
-	"openai-responses",
-	"anthropic-messages",
-	"google-generative-ai",
-]);
+const API_FAMILIES: Readonly<Record<ModelApi, { speakable: boolean }>> = {
+	"openai-completions": { speakable: true },
+	"openai-responses": { speakable: true },
+	"anthropic-messages": { speakable: true },
+	"google-generative-ai": { speakable: true },
+	systemone: { speakable: false },
+};
+
+export function acceptsCuratedApi(api: string): api is ModelApi {
+	return Object.prototype.hasOwnProperty.call(API_FAMILIES, api);
+}
+
+export function isSpeakableApi(api: ModelApi | undefined): boolean {
+	return API_FAMILIES[api ?? "openai-completions"].speakable;
+}
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ThinkingLevelMap = Partial<Record<ThinkingLevel, string | null>>;
@@ -73,6 +82,7 @@ export interface FreeModelEntry {
 	id: string;
 	name: string;
 	api?: ModelApi;
+	endpoint?: string;
 	reasoning: boolean;
 	thinkingLevelMap?: ThinkingLevelMap;
 	input: ("text" | "image")[];
@@ -91,6 +101,12 @@ export interface FreeModelsFile {
 	models: FreeModelEntry[];
 }
 
+/**
+ * pi's model config — the output of all resolution paths. `api` names the
+ * endpoint family this model is served on; it is set per model (not on the
+ * provider) because Zen free models span several families, while auth, base
+ * URL, and headers stay shared at the provider level.
+ */
 export type ZenModelConfig = FreeModelEntry;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -140,7 +156,13 @@ export function validateFreeModelsFile(data: unknown): data is FreeModelsFile {
 		if (typeof m !== "object" || m === null) return false;
 		if (typeof m.id !== "string" || !m.id) return false;
 		if (typeof m.name !== "string") return false;
-		if (m.api !== undefined && (typeof m.api !== "string" || !MODEL_APIS.has(m.api))) return false;
+		if (m.api !== undefined && (typeof m.api !== "string" || !acceptsCuratedApi(m.api))) return false;
+		if (
+			m.endpoint !== undefined &&
+			(typeof m.endpoint !== "string" || !/^https?:\/\//.test(m.endpoint))
+		) {
+			return false;
+		}
 		if (typeof m.reasoning !== "boolean") return false;
 		if (!Array.isArray(m.input) || m.input.length === 0) return false;
 		if (typeof m.contextWindow !== "number" || m.contextWindow <= 0) return false;
