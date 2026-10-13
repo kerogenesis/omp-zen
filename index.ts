@@ -16,14 +16,14 @@ import {
 	knownModelsSync,
 	revalidateFreeModels,
 	resolveOrRecover,
-	writeSnapshot,
+	writeUserCache,
 	FREE_MODELS_CDN_TTL_MS,
 	ZEN_ANONYMOUS_API_KEY,
 	ZEN_BASE_URL,
 	ZEN_PROVIDER_ID,
 	ZEN_PROVIDER_NAME,
 } from "./models.js";
-import { fromFreeModelEntry, isSpeakableApi, shapeZenPayload, type ModelApi, type ZenModelConfig } from "./shared.js";
+import { fromFreeModelEntry, isChatApi, shapeZenPayload, type ModelApi, type ZenModelConfig } from "./shared.js";
 
 let apiByModelId: ReadonlyMap<string, ModelApi> = new Map();
 const inFlightDecoys = new Map<string, (toolName: string) => boolean>();
@@ -32,25 +32,14 @@ function getSessionId(ctx: ExtensionContext): string {
 	try {
 		const sessionId = ctx.sessionManager.getSessionId();
 		if (sessionId) return opencodeIdFromSeed("ses", sessionId);
-	} catch {
-		// Session manager not initialized yet
-	}
+	} catch {}
 	return FALLBACK_SESSION_ID;
 }
 
 function registerProvider(pi: ExtensionAPI, models: ZenModelConfig[]): number {
-	// The endpoint family is per model; everything shared — baseUrl,
-	// credential, headers — stays here. Provider-level `api` is the default
-	// family for any model that omits one.
-	//
-	// Hold back families pi has no wire client for — today that is
-	// `systemone` (Jev), Zen's structured-evaluation protocol on
-	// /zen/v1/systemone, which answers typed questions rather than chat turns.
-	// Registering it would offer a model that fails on its first request; the
-	// curated list keeps its `endpoint` either way, so pi's Jev support only
-	// has to flip its family to speakable in shared.ts.
-	const speakable = models.filter((m) => isSpeakableApi(m.api));
-	apiByModelId = new Map(speakable.map((m) => [m.id, m.api ?? "openai-completions"]));
+	// Exclude non-chat protocols
+	const chatModels = models.filter((m) => isChatApi(m.api));
+	apiByModelId = new Map(chatModels.map((m) => [m.id, m.api ?? "openai-completions"]));
 	pi.registerProvider(ZEN_PROVIDER_ID, {
 		name: ZEN_PROVIDER_NAME,
 		baseUrl: ZEN_BASE_URL,
@@ -58,20 +47,19 @@ function registerProvider(pi: ExtensionAPI, models: ZenModelConfig[]): number {
 		authHeader: true,
 		api: "openai-completions",
 		headers: opencodeHeaders(currentOpencodeVersion),
-		models: speakable,
+		models: chatModels,
 	});
-	return speakable.length;
+	return chatModels.length;
 }
 function applyFreeModelsIfChanged(pi: ExtensionAPI, knownAt: number): boolean {
 	if (freeModelsUpdatedAt === knownAt) return false;
 	const configs = getCachedFreeModels().map(fromFreeModelEntry);
 	if (configs.length === 0) return false;
 	registerProvider(pi, configs);
-	writeSnapshot(configs);
+	writeUserCache(configs);
 	return true;
 }
 
-/** Always register something: the resolved list, or the last-known-good. */
 async function refreshAndRegister(pi: ExtensionAPI): Promise<number> {
 	const models = await resolveOrRecover();
 	return registerProvider(pi, models);

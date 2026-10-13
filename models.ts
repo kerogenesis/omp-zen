@@ -14,7 +14,7 @@ import {
 export const ZEN_PROVIDER_ID = "pi-zen";
 export const ZEN_PROVIDER_NAME = "OpenCode Zen (Free)";
 export const ZEN_ANONYMOUS_API_KEY = "public";
-export const ZEN_BASE_URL = process.env.ZEN_BASE_URL || "https://opencode.ai/zen/v1";
+export const ZEN_BASE_URL = process.env.ZEN_BASE_URL || "https://opencode.ai/inference/v1";
 export const FREE_MODELS_CDN_URL = "https://cdn.jsdelivr.net/gh/kerogenesis/omp-zen@data/free-models.json";
 
 export const FREE_MODELS_CDN_TTL_MS = 3_600_000;
@@ -30,14 +30,14 @@ interface FreeModelsCache {
 	models: FreeModelEntry[];
 }
 
-interface HttpCacheValidators {
+interface HttpConditionalHeaders {
 	etag?: string;
 	lastModified?: string;
 }
 
 let lastKnownGoodModels: ZenModelConfig[] | null = null;
 let freeModelsCache: FreeModelsCache | null = null;
-let freeModelsValidators: HttpCacheValidators = {};
+let freeModelsConditionalHeaders: HttpConditionalHeaders = {};
 let freeModelsRevalidate: Promise<void> | null = null;
 export let freeModelsUpdatedAt = 0;
 export let currentOpencodeVersion = "1.18.31";
@@ -50,22 +50,22 @@ export function getAgentDir(): string {
 	return join(homedir(), ".pi", "agent");
 }
 
-function getSnapshotPath(): string {
+function getUserCachePath(): string {
 	return join(getAgentDir(), "cache", "pi-zen-models.json");
 }
 
-export function readSnapshot(): ZenModelConfig[] {
+export function readUserCache(): ZenModelConfig[] {
 	try {
-		const snap = JSON.parse(readFileSync(getSnapshotPath(), "utf8")) as Snapshot;
+		const snap = JSON.parse(readFileSync(getUserCachePath(), "utf8")) as Snapshot;
 		return Array.isArray(snap?.models) ? snap.models : [];
 	} catch {
 		return [];
 	}
 }
 
-export function readBundledSnapshot(): ZenModelConfig[] {
+export function readBundledModels(): ZenModelConfig[] {
 	try {
-		const snapshotPath = join(import.meta.dirname || ".", "free-models.snapshot.json");
+		const snapshotPath = join(import.meta.dirname || ".", "free-models.json");
 		const file = JSON.parse(readFileSync(snapshotPath, "utf8")) as FreeModelsFile;
 		return Array.isArray(file?.models) ? file.models.map(fromFreeModelEntry) : [];
 	} catch {
@@ -73,10 +73,10 @@ export function readBundledSnapshot(): ZenModelConfig[] {
 	}
 }
 
-export function writeSnapshot(models: ZenModelConfig[]): void {
+export function writeUserCache(models: ZenModelConfig[]): void {
 	try {
 		try {
-			const disk = JSON.parse(readFileSync(getSnapshotPath(), "utf8")) as Snapshot;
+			const disk = JSON.parse(readFileSync(getUserCachePath(), "utf8")) as Snapshot;
 			if (
 				deepEqualJson(
 					disk.models.map((m) => ({ ...m, api: m.api ?? "openai-completions" })),
@@ -86,7 +86,6 @@ export function writeSnapshot(models: ZenModelConfig[]): void {
 				return;
 			}
 		} catch {
-			// No snapshot present yet
 		}
 		const dir = join(getAgentDir(), "cache");
 		mkdirSync(dir, { recursive: true });
@@ -94,17 +93,13 @@ export function writeSnapshot(models: ZenModelConfig[]): void {
 		const tmp = join(dir, `pi-zen-models.json.${process.pid}.tmp`);
 		try {
 			writeFileSync(tmp, payload);
-			renameSync(tmp, getSnapshotPath());
+			renameSync(tmp, getUserCachePath());
 		} catch {
 			try {
-				writeFileSync(getSnapshotPath(), payload);
-			} catch {
-				// Best-effort write
-			}
+				writeFileSync(getUserCachePath(), payload);
+			} catch {}
 		}
-	} catch {
-		// Best-effort persistence
-	}
+	} catch {}
 }
 
 export function getStoredKey(): string {
@@ -117,9 +112,7 @@ export function getStoredKey(): string {
 		if (cred?.type === "api_key" && typeof cred.key === "string" && cred.key) {
 			return cred.key;
 		}
-	} catch {
-		// No auth file or invalid format
-	}
+	} catch {}
 	return "";
 }
 
@@ -128,7 +121,7 @@ export function getApiKey(): string {
 }
 
 function storeFreeModelsResponse(res: Response): void {
-	freeModelsValidators = {
+	freeModelsConditionalHeaders = {
 		etag: res.headers.get("etag") ?? undefined,
 		lastModified: res.headers.get("last-modified") ?? undefined,
 	};
@@ -163,8 +156,8 @@ export async function fetchFreeModelsList(force = false): Promise<FreeModelEntry
 export function revalidateFreeModels(): Promise<void> {
 	freeModelsRevalidate ??= (async () => {
 		const headers: Record<string, string> = { Accept: "application/json" };
-		if (freeModelsValidators.etag) headers["If-None-Match"] = freeModelsValidators.etag;
-		else if (freeModelsValidators.lastModified) headers["If-Modified-Since"] = freeModelsValidators.lastModified;
+		if (freeModelsConditionalHeaders.etag) headers["If-None-Match"] = freeModelsConditionalHeaders.etag;
+		else if (freeModelsConditionalHeaders.lastModified) headers["If-Modified-Since"] = freeModelsConditionalHeaders.lastModified;
 
 		try {
 			const res = await fetch(FREE_MODELS_CDN_URL, {
@@ -209,8 +202,8 @@ export function getCachedFreeModels(): FreeModelEntry[] {
 
 export function knownModelsSync(): ZenModelConfig[] {
 	if (lastKnownGoodModels && lastKnownGoodModels.length > 0) return lastKnownGoodModels;
-	const disk = readSnapshot();
-	return disk.length > 0 ? disk : readBundledSnapshot();
+	const disk = readUserCache();
+	return disk.length > 0 ? disk : readBundledModels();
 }
 
 export async function resolveOrRecover(): Promise<ZenModelConfig[]> {
@@ -219,7 +212,7 @@ export async function resolveOrRecover(): Promise<ZenModelConfig[]> {
 		if (curated.length > 0) {
 			const configs = curated.map(fromFreeModelEntry);
 			lastKnownGoodModels = configs;
-			writeSnapshot(configs);
+			writeUserCache(configs);
 			return configs;
 		}
 	} catch (err) {

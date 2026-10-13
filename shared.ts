@@ -1,9 +1,3 @@
-/**
- * Shared types, pure helpers, and request-shaping utilities for omp-zen.
- * Contains no runtime dependencies or side effects.
- */
-
-// Re-export wire identity helpers
 export {
 	FALLBACK_SESSION_ID,
 	isZenRequest,
@@ -21,8 +15,6 @@ export {
 	validOpencodeVersion,
 } from "./identity.js";
 
-// ─── Provider Constants & Types ──────────────────────────────────────────────
-
 export const ZEN_PROVIDER_ID = "pi-zen";
 
 export type ModelApi =
@@ -32,20 +24,20 @@ export type ModelApi =
 	| "google-generative-ai"
 	| "systemone";
 
-const API_FAMILIES: Readonly<Record<ModelApi, { speakable: boolean }>> = {
-	"openai-completions": { speakable: true },
-	"openai-responses": { speakable: true },
-	"anthropic-messages": { speakable: true },
-	"google-generative-ai": { speakable: true },
-	systemone: { speakable: false },
+const API_FAMILIES: Readonly<Record<ModelApi, { chat: boolean }>> = {
+	"openai-completions": { chat: true },
+	"openai-responses": { chat: true },
+	"anthropic-messages": { chat: true },
+	"google-generative-ai": { chat: true },
+	systemone: { chat: false },
 };
 
 export function acceptsCuratedApi(api: string): api is ModelApi {
 	return Object.prototype.hasOwnProperty.call(API_FAMILIES, api);
 }
 
-export function isSpeakableApi(api: ModelApi | undefined): boolean {
-	return API_FAMILIES[api ?? "openai-completions"].speakable;
+export function isChatApi(api: ModelApi | undefined): boolean {
+	return API_FAMILIES[api ?? "openai-completions"].chat;
 }
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -101,15 +93,7 @@ export interface FreeModelsFile {
 	models: FreeModelEntry[];
 }
 
-/**
- * pi's model config — the output of all resolution paths. `api` names the
- * endpoint family this model is served on; it is set per model (not on the
- * provider) because Zen free models span several families, while auth, base
- * URL, and headers stay shared at the provider level.
- */
 export type ZenModelConfig = FreeModelEntry;
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 export function humanize(id: string): string {
 	return id
@@ -118,7 +102,6 @@ export function humanize(id: string): string {
 		.join(" ");
 }
 
-/** Translates models.dev reasoning_options into pi's thinkingLevelMap. */
 export function buildThinkingLevelMap(meta?: ModelsDevModel): ThinkingLevelMap | undefined {
 	const effort = meta?.reasoning_options?.find(
 		(o): o is { type: "effort"; values: string[] } =>
@@ -135,17 +118,14 @@ export function buildThinkingLevelMap(meta?: ModelsDevModel): ThinkingLevelMap |
 	return map;
 }
 
-/** Checks whether the model requires assistant reasoning content on replay. */
 export function needsReasoningReplay(meta?: ModelsDevModel): boolean {
 	return meta?.interleaved?.field === "reasoning_content";
 }
 
-/** Converts a FreeModelEntry into ZenModelConfig. */
 export function fromFreeModelEntry(entry: FreeModelEntry): ZenModelConfig {
 	return { ...entry };
 }
 
-/** Validates free-models.json structure. */
 export function validateFreeModelsFile(data: unknown): data is FreeModelsFile {
 	if (typeof data !== "object" || data === null) return false;
 	const obj = data as Record<string, unknown>;
@@ -178,27 +158,21 @@ export function validateFreeModelsFile(data: unknown): data is FreeModelsFile {
 	return true;
 }
 
-// ─── Free-Tier Request Shaping (Gate Bypass & Wire Parity) ───────────────────
-
-/** Tool names required by the Zen free tier gate. */
 export const ZEN_FREE_TIER_DECOY_TOOL_NAMES = ["bash", "read"] as const;
 
 const DECOY_DESCRIPTION =
 	"This tool is currently unavailable and must not be used. Do not call it, and do not mention it.";
 
-/** Chat completions decoy tool declarations. */
 export const ZEN_FREE_TIER_DECOY_TOOLS = [
 	{ type: "function", function: { name: "bash", description: DECOY_DESCRIPTION, parameters: { type: "object", properties: {} } } },
 	{ type: "function", function: { name: "read", description: DECOY_DESCRIPTION, parameters: { type: "object", properties: {} } } },
 ];
 
-/** Responses API flat decoy tool declarations. */
 export const ZEN_FREE_TIER_DECOY_TOOLS_RESPONSES = [
 	{ type: "function", name: "bash", description: DECOY_DESCRIPTION, parameters: { type: "object", properties: {} } },
 	{ type: "function", name: "read", description: DECOY_DESCRIPTION, parameters: { type: "object", properties: {} } },
 ];
 
-/** Anthropic flat decoy tool declarations. */
 export const ZEN_FREE_TIER_DECOY_TOOLS_ANTHROPIC = [
 	{ name: "bash", description: DECOY_DESCRIPTION, input_schema: { type: "object", properties: {} } },
 	{ name: "read", description: DECOY_DESCRIPTION, input_schema: { type: "object", properties: {} } },
@@ -302,7 +276,6 @@ export function shapeZenPayload(payload: unknown, apiLookup: ZenApiLookup): ZenD
 	const modelId = typeof obj.model === "string" ? obj.model : undefined;
 	if (!modelId) return undefined;
 
-	// Isolate third-party providers: only process models registered with Zen
 	const api =
 		apiLookup.get(modelId) ??
 		(modelId.includes("/") ? apiLookup.get(modelId.split("/").slice(1).join("/")) : undefined);
