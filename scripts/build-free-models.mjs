@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- *
- * Fetches the opencode.ai Zen docs table, identifies the free models,
- * enriches them with metadata from models.dev, and writes free-models.json.
+ * Builds free-models.json from the opencode docs table,
+ * zero-cost models.dev entries as fallback when docs is
+ * unreachable, enriched with models.dev metadata.
  *
  * Usage:
  *   node scripts/build-free-models.mjs                            # write to ./free-models.json
@@ -18,11 +18,13 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { apiForEndpoint } from "./zen-endpoints.mjs";
 
-// ─── Config ──────────────────────────────────────────────────────────────────
-
-const DOCS_URL = "https://opencode.ai/docs/zen";
+const DOCS_URLS = [
+	"https://opencode.ai/v2/docs/console/models/",
+	"https://opencode.ai/docs/zen",
+];
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const OPENCODE_NPM_URL = "https://registry.npmjs.org/opencode-ai/latest";
+const INFERENCE_BASE = "https://opencode.ai/inference/v1";
 const FETCH_TIMEOUT_MS = 15_000;
 
 // ─── Args ────────────────────────────────────────────────────────────────────
@@ -87,7 +89,7 @@ function loadOverrides(path) {
 
 async function fetchText(url) {
 	const res = await fetch(url, {
-		headers: { Accept: "text/html,application/json,text/plain,*/*" },
+		headers: { Accept: "text/html,application/json,text/plain,*/*", "User-Agent": "Mozilla/5.0 (compatible; omp-zen-build/1.0)" },
 		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 	});
 	if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} fetching ${url}`);
@@ -169,14 +171,56 @@ const KNOWN_FREE_ALIASES = [
 	{
 		id: "muse-spark-1.2-contributor-free",
 		name: "Muse Spark 1.2 Free",
-		endpoint: "https://opencode.ai/zen/v1/responses",
+		endpoint: "https://opencode.ai/inference/v1/responses",
 	},
 	{
 		id: "muse-spark-1.3-contributor-free",
 		name: "Muse Spark 1.3 Free",
-		endpoint: "https://opencode.ai/zen/v1/responses",
+		endpoint: "https://opencode.ai/inference/v1/responses",
 	},
 ];
+
+// ─── Docs fetch with fallback ──────────────────────────────────────────────
+
+async function fetchDocsTable() {
+	let lastErr = null;
+	for (const url of DOCS_URLS) {
+		try {
+			console.error(`Fetching docs ${url} ...`);
+			const html = await fetchText(url);
+			const models = parseDocsTable(html);
+			console.error(`Found ${models.length} models in docs table (${url})`);
+			if (models.length > 0) return { models, source: url };
+			lastErr = new Error(`no models parsed from ${url}`);
+		} catch (err) {
+			lastErr = err;
+			console.error(`docs fetch failed (${url}): ${err.message}`);
+		}
+	}
+	throw lastErr ?? new Error("docs fetch failed");
+}
+
+function endpointForDevEntry(id, meta) {
+	if (id === "jev-1.13-free") return `${INFERENCE_BASE}/systemone`;
+	const npm = meta?.provider?.npm ?? "";
+	if (/openai-compatible/i.test(npm)) return `${INFERENCE_BASE}/chat/completions`;
+	if (/anthropic/i.test(npm)) return `${INFERENCE_BASE}/messages`;
+	if (/openai/i.test(npm)) return `${INFERENCE_BASE}/responses`;
+	return `${INFERENCE_BASE}/chat/completions`;
+}
+
+function freeModelsFromDev(devSlice) {
+	const free = [];
+	for (const [id, meta] of Object.entries(devSlice)) {
+		if (meta?.status === "deprecated") continue;
+		if (meta?.cost?.input !== 0 || meta?.cost?.output !== 0) continue;
+		free.push({ name: meta?.name || humanize(id), id, endpoint: endpointForDevEntry(id, meta) });
+	}
+	if (!free.some((f) => f.id === "jev-1.13-free")) {
+		free.push({ name: "Jev 1.13 Free", id: "jev-1.13-free", endpoint: `${INFERENCE_BASE}/systemone` });
+	}
+	return free;
+}
 
 // ─── Enrich with models.dev metadata ─────────────────────────────────
 
@@ -290,19 +334,43 @@ async function main() {
 	// Load overrides
 	const overrides = loadOverrides(overridesPath);
 	if (overrides.defaultModel) {
-		console.error(` Overrides: defaultModel=${overrides.defaultModel}`);
+		console.error(`Overrides: defaultModel=${overrides.defaultModel}`);
 	}
 	if (overrides.disabledModels.length > 0) {
 		console.error(`Overrides: disabled=${overrides.disabledModels.join(", ")}`);
 	}
 
-	console.error("Fetching opencode.ai docs...");
-	const docsHtml = await fetchText(DOCS_URL);
-	const allModels = parseDocsTable(docsHtml);
-	console.error(`Found ${allModels.length} models in docs table`);
+	console.error("Fetching models.dev metadata...");
+	let devSlice = {};
+	try {
+		const devJson = await fetchJSON(MODELS_DEV_URL);
+		devSlice = devJson?.opencode?.models ?? {};
+		console.error(`Got metadata for ${Object.keys(devSlice).length} models from models.dev`);
+	} catch (err) {
+		console.error(`models.dev fetch failed: ${err.message} — using defaults`);
+	}
 
-	const freeModels = allModels.filter(isFreeModel);
-	console.error(`Identified ${freeModels.length} free models`);
+	let freeModels;
+	let source;
+	try {
+		const docs = await fetchDocsTable();
+		source = docs.source;
+		freeModels = docs.models.filter(isFreeModel);
+		console.error(`Identified ${freeModels.length} free models`);
+	} catch (err) {
+		console.error(`docs unavailable (${err.message}) — falling back to models.dev zero-cost list`);
+		if (Object.keys(devSlice).length === 0) {
+			console.error("models.dev has no data either — keeping previous list");
+			process.exit(1);
+		}
+		freeModels = freeModelsFromDev(devSlice);
+		console.error(`Identified ${freeModels.length} free models from models.dev`);
+		if (freeModels.length === 0) {
+			console.error("models.dev format may have changed — keeping previous list");
+			process.exit(1);
+		}
+		source = MODELS_DEV_URL;
+	}
 
 	const added = KNOWN_FREE_ALIASES.filter((k) => !freeModels.some((f) => f.id === k.id));
 	if (added.length > 0) {
@@ -326,16 +394,6 @@ async function main() {
 		console.error(`opencode version lookup failed: ${err.message} — omitting`);
 	}
 
-	console.error("Fetching models.dev metadata...");
-	let devSlice = {};
-	try {
-		const devJson = await fetchJSON(MODELS_DEV_URL);
-		devSlice = devJson?.opencode?.models ?? {};
-		console.error(`Got metadata for ${Object.keys(devSlice).length} models from models.dev`);
-	} catch (err) {
-		console.error(`models.dev fetch failed: ${err.message} — using defaults`);
-	}
-
 	let enriched = enrichWithMetadata(freeModels, devSlice);
 
 	// Apply disabled models from overrides
@@ -352,7 +410,7 @@ async function main() {
 	const output = {
 		$schema: "./free-models.schema.json",
 		generatedAt: new Date().toISOString(),
-		source: DOCS_URL,
+		source,
 		count: enriched.length,
 		defaultModel,
 		...(opencodeVersion ? { opencodeVersion } : {}),

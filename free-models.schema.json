@@ -13,7 +13,7 @@
 		"source": {
 			"type": "string",
 			"format": "uri",
-			"description": "URL of the docs page this was scraped from"
+			"description": "URL of the source this was built from (docs page or models.dev fallback)"
 		},
 		"count": {
 			"type": "integer",

@@ -276,7 +276,7 @@ export function ensureZenFreeTierShape(payload: unknown, api?: ModelApi): ZenDec
 			.filter((name) => name !== ""),
 	);
 
-	const missing = ZEN_FREE_TIER_DECOY_TOOL_NAMES.filter((name) => !existingNames.has(name));
+	const missing: string[] = ZEN_FREE_TIER_DECOY_TOOL_NAMES.filter((name) => !existingNames.has(name));
 	if (missing.length === 0) return null;
 
 	const appended =

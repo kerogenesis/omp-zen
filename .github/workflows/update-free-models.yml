@@ -68,7 +68,7 @@ jobs:
 
           git commit -m "chore: update free-models.json [skip ci]
 
-          Generated from opencode.ai/docs/zen + models.dev
+          Generated from opencode docs + models.dev
           Triggered by: ${{ github.event_name }}
           Commit: ${{ github.sha }}"
 
