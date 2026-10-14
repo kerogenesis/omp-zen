@@ -1,5 +1,6 @@
 export {
 	FALLBACK_SESSION_ID,
+	sessionIdFor,
 	isZenRequest,
 	nextRequestId,
 	normalizeGitRemote,
@@ -13,7 +14,7 @@ export {
 	projectIdFromRemote,
 	resolveProjectId,
 	validOpencodeVersion,
-} from "./identity.js";
+} from "./identity.ts";
 
 export const ZEN_PROVIDER_ID = "pi-zen";
 
@@ -158,25 +159,28 @@ export function validateFreeModelsFile(data: unknown): data is FreeModelsFile {
 	return true;
 }
 
-export const ZEN_FREE_TIER_DECOY_TOOL_NAMES = ["bash", "read"] as const;
+export const ZEN_FREE_TIER_DECOY_TOOL_NAMES = ["bash", "glob", "grep", "read"] as const;
 
 const DECOY_DESCRIPTION =
 	"This tool is currently unavailable and must not be used. Do not call it, and do not mention it.";
 
-export const ZEN_FREE_TIER_DECOY_TOOLS = [
-	{ type: "function", function: { name: "bash", description: DECOY_DESCRIPTION, parameters: { type: "object", properties: {} } } },
-	{ type: "function", function: { name: "read", description: DECOY_DESCRIPTION, parameters: { type: "object", properties: {} } } },
-];
+export const ZEN_FREE_TIER_DECOY_TOOLS = ZEN_FREE_TIER_DECOY_TOOL_NAMES.map((name) => ({
+	type: "function",
+	function: { name, description: DECOY_DESCRIPTION, parameters: { type: "object", properties: {} } },
+}));
 
-export const ZEN_FREE_TIER_DECOY_TOOLS_RESPONSES = [
-	{ type: "function", name: "bash", description: DECOY_DESCRIPTION, parameters: { type: "object", properties: {} } },
-	{ type: "function", name: "read", description: DECOY_DESCRIPTION, parameters: { type: "object", properties: {} } },
-];
+export const ZEN_FREE_TIER_DECOY_TOOLS_RESPONSES = ZEN_FREE_TIER_DECOY_TOOL_NAMES.map((name) => ({
+	type: "function",
+	name,
+	description: DECOY_DESCRIPTION,
+	parameters: { type: "object", properties: {} },
+}));
 
-export const ZEN_FREE_TIER_DECOY_TOOLS_ANTHROPIC = [
-	{ name: "bash", description: DECOY_DESCRIPTION, input_schema: { type: "object", properties: {} } },
-	{ name: "read", description: DECOY_DESCRIPTION, input_schema: { type: "object", properties: {} } },
-];
+export const ZEN_FREE_TIER_DECOY_TOOLS_ANTHROPIC = ZEN_FREE_TIER_DECOY_TOOL_NAMES.map((name) => ({
+	name,
+	description: DECOY_DESCRIPTION,
+	input_schema: { type: "object", properties: {} },
+}));
 
 export interface ZenDecoyInjection {
 	payload: Record<string, unknown>;

@@ -4,8 +4,6 @@ import { createHash, randomBytes } from "node:crypto";
 export const OPENCODE_CLIENT = "cli";
 export const OPENCODE_UA_SUFFIX = "ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14";
 export const OPENCODE_MIN_UA_VERSION = "1.18.31";
-export const FALLBACK_SESSION_ID = "ses_f4f54dfb4ffenca2ngz8p9R1uA";
-
 const ID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const ID_TIME_SHIFT = 0x1000n;
 
@@ -32,6 +30,19 @@ export function opencodeId(
 	);
 	return `${prefix}_${formatIdBody(timeBytes, random.subarray(0, 14))}`;
 }
+
+const sessionIds = new Map<string, string>();
+
+export function sessionIdFor(sessionId?: string): string {
+	const key = sessionId || "";
+	const cached = sessionIds.get(key);
+	if (cached) return cached;
+	const id = opencodeId("ses", Date.now(), 0, randomBytes(14));
+	sessionIds.set(key, id);
+	return id;
+}
+
+export const FALLBACK_SESSION_ID = sessionIdFor("");
 
 export function opencodeIdFromSeed(prefix: "ses" | "msg", seed: string): string {
 	const digest = createHash("sha1").update(seed).digest();

@@ -1,4 +1,5 @@
 export interface FailedAssistantMessage {
+	role?: string;
 	provider: string;
 	model: string;
 	stopReason: string;
@@ -31,12 +32,11 @@ export function formatFreeTierError(msg: FailedAssistantMessage, providerId: str
 	return [
 		`OpenCode Zen rejected request for "${msg.model}" (403 FreeTierError).`,
 		"",
-		"Free models are available anonymously only up to the shared network quota.",
+		"The free service is currently rejecting the client integration (this is a gate refusal, not your quota or key).",
 		"",
 		"Options:",
-		`1. Run /login ${providerId} to use a dedicated free key`,
-		"2. Select another free model via /model",
-		"3. Wait for the temporary rate limit to reset",
+		`1. Use another model for now (/model)`,
+		`2. Run /login ${providerId} with a personal API key from https://opencode.ai/zen`,
 	].join("\n");
 }
 

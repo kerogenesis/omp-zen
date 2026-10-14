@@ -6,7 +6,7 @@ import {
 	isZenRequest,
 	nextRequestId,
 	opencodeHeaders,
-	opencodeIdFromSeed,
+	sessionIdFor,
 } from "./identity.js";
 import {
 	currentOpencodeVersion,
@@ -29,11 +29,12 @@ let apiByModelId: ReadonlyMap<string, ModelApi> = new Map();
 const inFlightDecoys = new Map<string, (toolName: string) => boolean>();
 
 function getSessionId(ctx: ExtensionContext): string {
+	let key = "";
 	try {
 		const sessionId = ctx.sessionManager.getSessionId();
-		if (sessionId) return opencodeIdFromSeed("ses", sessionId);
+		if (sessionId) key = sessionId;
 	} catch {}
-	return FALLBACK_SESSION_ID;
+	return sessionIdFor(key);
 }
 
 function registerProvider(pi: ExtensionAPI, models: ZenModelConfig[]): number {
@@ -124,7 +125,7 @@ export default async function (pi: ExtensionAPI) {
 		if (msg.role !== "assistant") return;
 		const friendly = getZenFriendlyErrorMessage(msg, ZEN_PROVIDER_ID);
 		if (!friendly) return;
-		return { message: { ...msg, errorMessage: friendly } };
+		return { message: { ...event.message, errorMessage: friendly } };
 	});
 
 	pi.on("session_before_compact", async (event, ctx) => {
@@ -140,7 +141,11 @@ export default async function (pi: ExtensionAPI) {
 				model,
 				auth.apiKey,
 				undefined,
+				event.customInstructions,
+				event.signal,
+				ctx.thinkingLevel,
 				createZenCompactionStreamFn(getSessionId(ctx), auth.headers, apiByModelId),
+				auth.env,
 			);
 			return { compaction };
 		} catch {
