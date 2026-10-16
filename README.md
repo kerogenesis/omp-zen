@@ -24,7 +24,7 @@ pi install git:github.com/kerogenesis/omp-zen
 ## Env
 
 - `ZEN_API_KEY` — headless/CI use (skips `/login`)
-- `ZEN_BASE_URL` — override the endpoint (default `https://opencode.ai/zen/v1`)
+- `ZEN_BASE_URL` — override the endpoint (default `https://opencode.ai/inference/v1`)
 - `PI_CODING_AGENT_DIR` — alternate agent config dir
 
 ## License

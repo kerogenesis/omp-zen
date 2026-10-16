@@ -40,7 +40,7 @@ let freeModelsCache: FreeModelsCache | null = null;
 let freeModelsConditionalHeaders: HttpConditionalHeaders = {};
 let freeModelsRevalidate: Promise<void> | null = null;
 export let freeModelsUpdatedAt = 0;
-export let currentOpencodeVersion = "1.18.31";
+export let currentOpencodeVersion = "2.0.26";
 
 
 export function getAgentDir(): string {

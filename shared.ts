@@ -2,15 +2,11 @@ export {
 	FALLBACK_SESSION_ID,
 	sessionIdFor,
 	isZenRequest,
-	nextRequestId,
 	normalizeGitRemote,
-	opencodeHeaders,
 	opencodeId,
 	opencodeIdFromSeed,
 	opencodeUserAgent,
 	OPENCODE_CLIENT,
-	OPENCODE_MIN_UA_VERSION,
-	OPENCODE_UA_SUFFIX,
 	projectIdFromRemote,
 	resolveProjectId,
 	validOpencodeVersion,
@@ -159,38 +155,84 @@ export function validateFreeModelsFile(data: unknown): data is FreeModelsFile {
 	return true;
 }
 
-export const ZEN_FREE_TIER_DECOY_TOOL_NAMES = ["bash", "glob", "grep", "read"] as const;
+export const ZEN_FINGERPRINT_TOOL_NAMES = ["read", "shell"] as const;
 
-const DECOY_DESCRIPTION =
-	"This tool is currently unavailable and must not be used. Do not call it, and do not mention it.";
+export const ZEN_FINGERPRINT_DEFINITIONS: Record<
+	string,
+	{ description: string; parameters: Record<string, unknown> }
+> = {
+	read: {
+		description:
+			"Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.",
+		parameters: {
+			type: "object",
+			properties: {
+				path: { type: "string", description: "File or directory to read" },
+				offset: { type: "integer", minimum: 0, description: "The line or directory entry to start reading from (1-based)" },
+				limit: { type: "integer", minimum: 0, description: "The maximum number of lines or directory entries to read (defaults to and capped at 2000)" },
+			},
+			required: ["path"],
+			additionalProperties: false,
+		},
+	},
+	shell: {
+		description:
+			"Execute a shell command and return its output. Commands run on Linux using bash. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.",
+		parameters: {
+			type: "object",
+			properties: {
+				command: { type: "string", description: "Shell command string to execute" },
+				workdir: { type: "string", description: "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead." },
+				timeout: { type: "integer", minimum: 0, description: "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default." },
+				background: { type: "boolean", description: "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when they complete. DO NOT poll for completion." },
+			},
+			required: ["command"],
+			additionalProperties: false,
+		},
+	},
+};
 
-export const ZEN_FREE_TIER_DECOY_TOOLS = ZEN_FREE_TIER_DECOY_TOOL_NAMES.map((name) => ({
-	type: "function",
-	function: { name, description: DECOY_DESCRIPTION, parameters: { type: "object", properties: {} } },
-}));
-
-export const ZEN_FREE_TIER_DECOY_TOOLS_RESPONSES = ZEN_FREE_TIER_DECOY_TOOL_NAMES.map((name) => ({
-	type: "function",
-	name,
-	description: DECOY_DESCRIPTION,
-	parameters: { type: "object", properties: {} },
-}));
-
-export const ZEN_FREE_TIER_DECOY_TOOLS_ANTHROPIC = ZEN_FREE_TIER_DECOY_TOOL_NAMES.map((name) => ({
-	name,
-	description: DECOY_DESCRIPTION,
-	input_schema: { type: "object", properties: {} },
-}));
-
-export interface ZenDecoyInjection {
-	payload: Record<string, unknown>;
-	shouldBlock: (toolName: string) => boolean;
+function zenToolNameOf(tool: unknown): string {
+	if (!tool || typeof tool !== "object") return "";
+	const t = tool as { name?: unknown; function?: { name?: unknown } };
+	if (typeof t.name === "string" && t.name.trim()) return t.name.trim();
+	if (typeof t.function?.name === "string" && t.function.name.trim()) return t.function.name.trim();
+	return "";
 }
 
-/**
- * Sanitizes multi-turn input items for the Responses API (Muse Spark).
- * Strips account-bound encrypted reasoning fields that fail when replayed across pooled accounts.
- */
+function isFingerprintDefinition(tool: unknown, key: string): boolean {
+	if (!tool || typeof tool !== "object") return false;
+	const t = tool as { function?: unknown; description?: unknown; parameters?: unknown; input_schema?: unknown };
+	const def = (t.function && typeof t.function === "object" ? t.function : t) as typeof t;
+	const want = ZEN_FINGERPRINT_DEFINITIONS[key];
+	if (!want || typeof def.description !== "string" || def.description !== want.description) return false;
+	const params = def.parameters !== undefined ? def.parameters : def.input_schema;
+	return JSON.stringify(params) === JSON.stringify(want.parameters);
+}
+
+function fingerprintTool(name: string, api: ModelApi | undefined): Record<string, unknown> {
+	const def = ZEN_FINGERPRINT_DEFINITIONS[name];
+	if (!def) return {};
+	const { description, parameters } = def;
+	if (api === "openai-responses") return { type: "function", name, description, parameters };
+	if (api === "anthropic-messages") return { name, description, input_schema: parameters };
+	return { type: "function", function: { name, description, parameters } };
+}
+
+function withZenToolName(tool: unknown, name: string): Record<string, unknown> {
+	const t = tool as Record<string, unknown>;
+	if (t.function && typeof t.function === "object") {
+		return { ...t, function: { ...(t.function as Record<string, unknown>), name } };
+	}
+	return { ...t, name };
+}
+
+export type ZenShapedRequest = {
+	payload: Record<string, unknown>;
+	shouldBlock: (toolName: string) => boolean;
+	restoreToolName: (toolName: string) => string;
+};
+
 export function sanitizeZenResponsesItems(payload: Record<string, unknown>): void {
 	const input = payload.input;
 	if (!Array.isArray(input)) return;
@@ -205,76 +247,163 @@ export function sanitizeZenResponsesItems(payload: Record<string, unknown>): voi
 	);
 }
 
-function createDecoyBlocker(names: readonly string[]): (toolName: string) => boolean {
-	return (toolName) => names.includes(toolName);
-}
-
-/**
- * Ensures payload satisfies the Zen free-tier gate:
- * - Must contain 'bash' and 'read' tool declarations.
- * - Forces tool_choice='none' on tool-less chat completions turns to prevent accidental decoy calls.
- * - Sets store=false and sanitizes encrypted tokens for Responses API (Muse).
- */
-export function ensureZenFreeTierShape(payload: unknown, api?: ModelApi): ZenDecoyInjection | null {
+export function ensureZenFreeTierShape(payload: unknown, api?: ModelApi): ZenShapedRequest | null {
 	if (api === "google-generative-ai") return null;
 	if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
 	const obj = payload as Record<string, unknown>;
 
 	if (api === "openai-responses") {
 		obj.store = false;
-		if (obj.tool_choice !== undefined && obj.tool_choice !== "auto") obj.tool_choice = "auto";
+		obj.tool_choice = "auto";
 		sanitizeZenResponsesItems(obj);
+	} else if (obj.tool_choice === "none") {
+		delete obj.tool_choice;
 	}
 
-	const tools = Array.isArray(obj.tools) ? obj.tools : null;
-	if (tools === null || tools.length === 0) {
-		obj.tools =
-			api === "openai-responses"
-				? ZEN_FREE_TIER_DECOY_TOOLS_RESPONSES
-				: api === "anthropic-messages"
-					? ZEN_FREE_TIER_DECOY_TOOLS_ANTHROPIC
-					: ZEN_FREE_TIER_DECOY_TOOLS;
+	const tools = Array.isArray(obj.tools) ? [...obj.tools] : [];
+	const aliases: { alias: string; original: string }[] = [];
 
-		if (api !== "openai-responses" && api !== "anthropic-messages" && obj.tool_choice === undefined) {
-			obj.tool_choice = "none";
+	const taken = new Set<string>(tools.map(zenToolNameOf).filter((name) => name !== ""));
+	const seenFingerprint = new Set<string>();
+	const shaped: unknown[] = [];
+	for (const tool of tools) {
+		const key = ZEN_FINGERPRINT_TOOL_NAMES.find((n) => n === zenToolNameOf(tool));
+		if (!key) {
+			shaped.push(tool);
+			continue;
 		}
-		return { payload: obj, shouldBlock: createDecoyBlocker(ZEN_FREE_TIER_DECOY_TOOL_NAMES) };
+		if (seenFingerprint.has(key)) continue;
+		seenFingerprint.add(key);
+		if (isFingerprintDefinition(tool, key)) {
+			shaped.push(tool);
+			continue;
+		}
+		let alias = `${key}_client`;
+		for (let i = 2; taken.has(alias); i++) alias = `${key}_client${i}`;
+		taken.add(alias);
+		aliases.push({ alias, original: key });
+		shaped.push(withZenToolName(tool, alias));
 	}
 
-	const existingNames = new Set(
-		tools
-			.map((tool) => {
-				const t = tool as { name?: unknown; function?: { name?: unknown } };
-				return typeof t?.function?.name === "string"
-					? t.function.name
-					: typeof t?.name === "string"
-						? t.name
-						: "";
-			})
-			.filter((name) => name !== ""),
-	);
+	const appended: string[] = [];
+	const present = new Set(shaped.map(zenToolNameOf));
+	for (const name of ZEN_FINGERPRINT_TOOL_NAMES) {
+		if (present.has(name)) continue;
+		shaped.push(fingerprintTool(name, api));
+		appended.push(name);
+	}
+	obj.tools = shaped;
 
-	const missing: string[] = ZEN_FREE_TIER_DECOY_TOOL_NAMES.filter((name) => !existingNames.has(name));
-	if (missing.length === 0) return null;
+	noteUnavailableTools(obj, api, appended);
 
-	const appended =
-		api === "openai-responses"
-			? ZEN_FREE_TIER_DECOY_TOOLS_RESPONSES.filter((tool) => missing.includes(tool.name))
-			: api === "anthropic-messages"
-				? ZEN_FREE_TIER_DECOY_TOOLS_ANTHROPIC.filter((tool) => missing.includes(tool.name))
-				: ZEN_FREE_TIER_DECOY_TOOLS.filter((tool) => missing.includes(tool.function.name));
+	if (aliases.length > 0) {
+		retargetZenToolChoice(obj, aliases);
+		aliasZenHistoryToolCalls(obj, aliases);
+	}
 
-	obj.tools = [...tools, ...appended];
-	return { payload: obj, shouldBlock: createDecoyBlocker(missing) };
+	if (api !== "openai-responses" && api !== "anthropic-messages" && Array.isArray(obj.messages)) {
+		obj.messages = (obj.messages as Record<string, unknown>[]).map((m) => {
+			const rc = m?.reasoning_content;
+			if (m?.role !== "assistant" || (typeof rc === "string" && rc.length > 0)) return m;
+			return { ...m, reasoning_content: " " };
+		});
+	}
+
+	const appendedSet = new Set(appended);
+	const originalByAlias = new Map(aliases.map((a) => [a.alias, a.original]));
+	return {
+		payload: obj,
+		shouldBlock: (toolName) => appendedSet.has(toolName),
+		restoreToolName: (toolName) => originalByAlias.get(toolName) ?? toolName,
+	};
+}
+
+function retargetZenToolChoice(
+	obj: Record<string, unknown>,
+	aliases: { alias: string; original: string }[],
+): void {
+	const choice = obj.tool_choice;
+	if (!choice || typeof choice !== "object" || Array.isArray(choice)) return;
+	const byOriginal = new Map(aliases.map((a) => [a.original, a.alias]));
+	const c = choice as { name?: unknown; function?: { name?: unknown } };
+	if (typeof c.name === "string" && byOriginal.has(c.name.trim())) {
+		obj.tool_choice = { ...(choice as Record<string, unknown>), name: byOriginal.get(c.name.trim()) };
+		return;
+	}
+	const fn = c.function;
+	if (fn && typeof fn === "object" && typeof fn.name === "string" && byOriginal.has(fn.name.trim())) {
+		obj.tool_choice = {
+			...(choice as Record<string, unknown>),
+			function: { ...(fn as Record<string, unknown>), name: byOriginal.get(fn.name.trim()) },
+		};
+	}
+}
+
+function aliasZenHistoryToolCalls(
+	obj: Record<string, unknown>,
+	aliases: { alias: string; original: string }[],
+): void {
+	if (aliases.length === 0) return;
+	const byOriginal = new Map(aliases.map((a) => [a.original, a.alias]));
+
+	if (Array.isArray(obj.input)) {
+		obj.input = (obj.input as Record<string, unknown>[]).map((item) =>
+			item?.type === "function_call" && typeof item.name === "string" && byOriginal.has(item.name)
+				? { ...item, name: byOriginal.get(item.name) }
+				: item,
+		);
+	}
+
+	if (Array.isArray(obj.messages)) {
+		obj.messages = (obj.messages as Record<string, unknown>[]).map((msg) => {
+			if (!Array.isArray(msg?.tool_calls)) return msg;
+			return {
+				...msg,
+				tool_calls: (msg.tool_calls as { function?: { name?: unknown } }[]).map((call) =>
+					typeof call?.function?.name === "string" && byOriginal.has(call.function.name)
+						? { ...call, function: { ...call.function, name: byOriginal.get(call.function.name) } }
+						: call,
+				),
+			};
+		});
+	}
+}
+
+function noteUnavailableTools(
+	obj: Record<string, unknown>,
+	api: ModelApi | undefined,
+	names: string[],
+): void {
+	if (names.length === 0) return;
+	const list = names.map((name) => `\`${name}\``).join(" or ");
+	const note =
+		names.length > 1
+			? `Do not call the ${list} tools; they are placeholders that do nothing. Use the other tools you have been given instead.`
+			: `Do not call the ${list} tool; it is a placeholder that does nothing. Use the other tools you have been given instead.`;
+	if (api === "openai-responses") {
+		obj.instructions =
+			typeof obj.instructions === "string" && obj.instructions.trim()
+				? `${obj.instructions}\n\n${note}`
+				: note;
+		return;
+	}
+	if (api === "anthropic-messages") {
+		if (typeof obj.system === "string") obj.system = `${obj.system}\n\n${note}`;
+		else if (obj.system === undefined) obj.system = note;
+		return;
+	}
+	if (!Array.isArray(obj.messages)) return;
+	const first = obj.messages[0] as { role?: unknown; content?: unknown } | undefined;
+	if (first?.role === "system" && typeof first.content === "string") {
+		obj.messages = [{ ...first, content: `${first.content}\n\n${note}` }, ...obj.messages.slice(1)];
+	} else {
+		obj.messages = [{ role: "system", content: note }, ...(obj.messages as unknown[])];
+	}
 }
 
 export type ZenApiLookup = Pick<Map<string, ModelApi>, "get">;
 
-/**
- * Shapes outgoing request payloads for Zen models while guaranteeing strict isolation
- * for other configured providers. Returns undefined untouched if model is not registered under Zen.
- */
-export function shapeZenPayload(payload: unknown, apiLookup: ZenApiLookup): ZenDecoyInjection | undefined {
+export function shapeZenPayload(payload: unknown, apiLookup: ZenApiLookup): ZenShapedRequest | undefined {
 	if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
 	const obj = payload as Record<string, unknown>;
 	const modelId = typeof obj.model === "string" ? obj.model : undefined;

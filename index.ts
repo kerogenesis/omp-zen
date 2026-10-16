@@ -2,9 +2,7 @@ import { compact, type ExtensionAPI, type ExtensionContext } from "@earendil-wor
 import { createZenCompactionStreamFn } from "./compaction.js";
 import { getZenFriendlyErrorMessage, type FailedAssistantMessage } from "./errors.js";
 import {
-	FALLBACK_SESSION_ID,
 	isZenRequest,
-	nextRequestId,
 	opencodeHeaders,
 	sessionIdFor,
 } from "./identity.js";
@@ -23,12 +21,19 @@ import {
 	ZEN_PROVIDER_ID,
 	ZEN_PROVIDER_NAME,
 } from "./models.js";
-import { fromFreeModelEntry, isChatApi, shapeZenPayload, type ModelApi, type ZenModelConfig } from "./shared.js";
+import {
+	fromFreeModelEntry,
+	isChatApi,
+	shapeZenPayload,
+	type ModelApi,
+	type ZenModelConfig,
+	type ZenShapedRequest,
+} from "./shared.js";
 
 let apiByModelId: ReadonlyMap<string, ModelApi> = new Map();
-const inFlightDecoys = new Map<string, (toolName: string) => boolean>();
+const inFlightShaping = new Map<string, ZenShapedRequest>();
 
-function getSessionId(ctx: ExtensionContext): string {
+function getSessionId(ctx?: ExtensionContext): string {
 	let key = "";
 	try {
 		const sessionId = ctx.sessionManager.getSessionId();
@@ -96,36 +101,59 @@ export default async function (pi: ExtensionAPI) {
 
 	pi.on("before_provider_headers", (event, ctx) => {
 		if (!isZenRequest(event.headers)) return;
-		event.headers["x-opencode-session"] = getSessionId(ctx);
-		event.headers["x-opencode-request"] = nextRequestId();
+		const session = getSessionId(ctx);
+		event.headers["x-opencode-session"] = session;
+		event.headers["x-opencode-session-id"] = session;
+		event.headers["x-session-affinity"] = session;
+		event.headers["x-session-id"] = session;
 	});
 
 	pi.on("before_provider_request", (event, ctx) => {
 		const shaped = shapeZenPayload(event?.payload, apiByModelId);
 		const key = getSessionId(ctx);
 		if (shaped) {
-			inFlightDecoys.set(key, shaped.shouldBlock);
+			inFlightShaping.set(key, shaped);
 			return shaped.payload;
 		}
-		inFlightDecoys.delete(key);
+		inFlightShaping.delete(key);
 		return event?.payload;
 	});
 
 	pi.on("tool_call", (event, ctx) => {
-		const shouldBlock = inFlightDecoys.get(getSessionId(ctx));
-		if (!shouldBlock || !shouldBlock(event.toolName)) return;
+		const shaping = inFlightShaping.get(getSessionId(ctx));
+		if (!shaping || !shaping.shouldBlock(event.toolName)) return;
 		return {
 			block: true,
-			reason: "Decoy tool added for OpenCode Zen compatibility — no action needed.",
+			reason: "Placeholder tool added for Zen free-tier compatibility — no action needed.",
 		};
 	});
 
-	pi.on("message_end", (event) => {
-		const msg = event.message as FailedAssistantMessage;
+	pi.on("message_end", (event, ctx) => {
+		const msg = event.message as FailedAssistantMessage & {
+			content?: Array<{ type?: string; name?: string; [key: string]: unknown }>;
+		};
 		if (msg.role !== "assistant") return;
-		const friendly = getZenFriendlyErrorMessage(msg, ZEN_PROVIDER_ID);
-		if (!friendly) return;
-		return { message: { ...event.message, errorMessage: friendly } };
+		const shaping = inFlightShaping.get(getSessionId(ctx));
+		let restored = msg;
+		if (shaping && Array.isArray(msg.content)) {
+			let changed = false;
+			const content = msg.content.map((item) => {
+				if (item?.type !== "toolCall" || !item.name) return item;
+				const original = item.name;
+				const name = shaping.restoreToolName(original);
+				if (name !== original) {
+					changed = true;
+					return { ...item, name };
+				}
+				return item;
+			});
+			if (changed) {
+				restored = { ...msg, content };
+			}
+		}
+		const friendly = getZenFriendlyErrorMessage(restored, ZEN_PROVIDER_ID);
+		if (!friendly && restored === msg) return;
+		return { message: friendly ? { ...restored, errorMessage: friendly } : restored };
 	});
 
 	pi.on("session_before_compact", async (event, ctx) => {

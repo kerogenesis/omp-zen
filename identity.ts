@@ -2,15 +2,14 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 
 export const OPENCODE_CLIENT = "cli";
-export const OPENCODE_UA_SUFFIX = "ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14";
-export const OPENCODE_MIN_UA_VERSION = "1.18.31";
+export const OPENCODE_UA_CHANNEL = "latest";
+export const OPENCODE_UA_VERSION = "2.0.26";
+export const OPENCODE_UA_CLIENT = "cli";
 const ID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const ID_TIME_SHIFT = 0x1000n;
 
 let cachedProjectId: string | null = null;
-let idCounter = 0;
 
-/** Formats 6 bytes of timestamp (12 hex chars) + 14 random base62 characters. */
 function formatIdBody(timeBytes: Uint8Array, bodyBytes: Uint8Array): string {
 	const time = Array.from(timeBytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 	const body = Array.from(bodyBytes, (byte) => ID_ALPHABET[byte % ID_ALPHABET.length]).join("");
@@ -49,19 +48,14 @@ export function opencodeIdFromSeed(prefix: "ses" | "msg", seed: string): string 
 	return `${prefix}_${formatIdBody(digest.subarray(0, 6), digest.subarray(6, 20))}`;
 }
 
-export function opencodeUserAgent(version: string): string {
-	return `opencode/${version} ${OPENCODE_UA_SUFFIX}`;
+export function opencodeUserAgent(version?: string): string {
+	return `opencode/${OPENCODE_UA_CHANNEL}/${validOpencodeVersion(version)}/${OPENCODE_UA_CLIENT}`;
 }
 
-export function validOpencodeVersion(version: string): string {
-	const match = String(version || "").trim().match(/^(\d+)\.(\d+)(?:\.(\d+))?/);
-	if (!match) return OPENCODE_MIN_UA_VERSION;
-	const major = Number.parseInt(match[1] ?? "", 10);
-	const minor = Number.parseInt(match[2] ?? "", 10);
-	if (Number.isNaN(major) || Number.isNaN(minor) || major < 1 || (major === 1 && minor < 17)) {
-		return OPENCODE_MIN_UA_VERSION;
-	}
-	return match[0] ?? OPENCODE_MIN_UA_VERSION;
+export function validOpencodeVersion(version?: string): string {
+	const m = String(version ?? "").trim().match(/^(\d+)\.\d+\.\d+/);
+	if (m && Number.parseInt(m[1] ?? "", 10) >= 2) return m[0] ?? OPENCODE_UA_VERSION;
+	return OPENCODE_UA_VERSION;
 }
 
 export function normalizeGitRemote(input: string): string | undefined {
@@ -103,16 +97,24 @@ export function resolveProjectId(): string {
 	return cachedProjectId;
 }
 
+let lastRequestMs = 0;
+let msRequestCounter = 0;
+
 export function nextRequestId(): string {
-	idCounter = (idCounter + 1) % 4096;
-	return opencodeId("msg", Date.now(), idCounter, randomBytes(14));
+	const now = Date.now();
+	if (now !== lastRequestMs) {
+		lastRequestMs = now;
+		msRequestCounter = 0;
+	}
+	msRequestCounter++;
+	return opencodeId("msg", now, msRequestCounter, randomBytes(14));
 }
 
 export function isZenRequest(headers: Record<string, unknown>): boolean {
 	return Boolean(headers["x-opencode-project"]);
 }
 
-export function opencodeHeaders(version: string): Record<string, string> {
+export function opencodeHeaders(version?: string): Record<string, string> {
 	return {
 		"User-Agent": opencodeUserAgent(version),
 		"x-opencode-client": OPENCODE_CLIENT,

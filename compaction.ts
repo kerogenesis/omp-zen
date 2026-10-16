@@ -6,7 +6,6 @@ import {
 	type ProviderHeaders,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai/compat";
-import { nextRequestId } from "./identity.js";
 import { shapeZenPayload, type ZenApiLookup } from "./shared.js";
 
 export type ZenStreamFn = (
@@ -31,7 +30,9 @@ export function createZenCompactionStreamFn(
 				...(authHeaders ?? {}),
 				...(options?.headers ?? {}),
 				"x-opencode-session": sessionId,
-				"x-opencode-request": nextRequestId(),
+				"x-opencode-session-id": sessionId,
+				"x-session-affinity": sessionId,
+				"x-session-id": sessionId,
 			},
 			onPayload: (payload: unknown) =>
 				shapeZenPayload(payload, apiByModelId)?.payload ?? payload,
