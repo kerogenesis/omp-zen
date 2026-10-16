@@ -1,8 +1,8 @@
 {
 	"$schema": "./free-models.schema.json",
-	"generatedAt": "2026-10-16T03:53:54.093Z",
+	"generatedAt": "2026-10-16T11:02:11.710Z",
 	"source": "https://opencode.ai/v2/docs/console/models/",
-	"count": 14,
+	"count": 16,
 	"defaultModel": "big-pickle",
 	"opencodeVersion": "1.19.2",
 	"models": [
@@ -33,6 +33,42 @@
 			"reasoning": true,
 			"input": [
 				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 32000,
+			"compat": {
+				"maxTokensField": "max_tokens",
+				"supportsStore": false,
+				"supportsReasoningEffort": true,
+				"supportsDeveloperRole": false,
+				"supportsUsageInStreaming": false,
+				"requiresReasoningContentOnAssistantMessages": true
+			}
+		},
+		{
+			"id": "glm-5.3-flash-free",
+			"name": "GLM-5.3-Flash Free",
+			"api": "openai-completions",
+			"endpoint": "https://opencode.ai/inference/openai/v1/chat/completions",
+			"reasoning": true,
+			"thinkingLevelMap": {
+				"off": null,
+				"minimal": null,
+				"low": "low",
+				"medium": null,
+				"high": "high",
+				"xhigh": null,
+				"max": "max"
+			},
+			"input": [
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0,
@@ -149,6 +185,41 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 131072,
+			"compat": {
+				"maxTokensField": "max_tokens",
+				"supportsStore": false,
+				"supportsReasoningEffort": true,
+				"supportsDeveloperRole": false,
+				"supportsUsageInStreaming": false,
+				"requiresReasoningContentOnAssistantMessages": true
+			}
+		},
+		{
+			"id": "ll-alpha-free",
+			"name": "LL Alpha Free",
+			"api": "openai-completions",
+			"endpoint": "https://opencode.ai/inference/openai/v1/chat/completions",
+			"reasoning": true,
+			"thinkingLevelMap": {
+				"off": null,
+				"minimal": null,
+				"low": "low",
+				"medium": "medium",
+				"high": "high",
+				"xhigh": "xhigh",
+				"max": "max"
+			},
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 65536,
 			"compat": {
 				"maxTokensField": "max_tokens",
 				"supportsStore": false,
