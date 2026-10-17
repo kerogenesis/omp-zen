@@ -1,6 +1,6 @@
 import { compact, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createZenCompactionStreamFn } from "./compaction.js";
-import { getZenFriendlyErrorMessage, type FailedAssistantMessage } from "./errors.js";
+import { DEPRECATED_MODEL_REGEX, getZenFriendlyErrorMessage, type FailedAssistantMessage } from "./errors.js";
 import {
 	isZenRequest,
 	opencodeHeaders,
@@ -8,6 +8,7 @@ import {
 } from "./identity.js";
 import {
 	currentOpencodeVersion,
+	evictModel,
 	freeModelsUpdatedAt,
 	getApiKey,
 	getCachedFreeModels,
@@ -36,7 +37,7 @@ const inFlightShaping = new Map<string, ZenShapedRequest>();
 function getSessionId(ctx?: ExtensionContext): string {
 	let key = "";
 	try {
-		const sessionId = ctx.sessionManager.getSessionId();
+		const sessionId = ctx?.sessionManager?.getSessionId();
 		if (sessionId) key = sessionId;
 	} catch {}
 	return sessionIdFor(key);
@@ -129,15 +130,15 @@ export default async function (pi: ExtensionAPI) {
 	});
 
 	pi.on("message_end", (event, ctx) => {
-		const msg = event.message as FailedAssistantMessage & {
+		const rawMsg = event.message as unknown as FailedAssistantMessage & {
 			content?: Array<{ type?: string; name?: string; [key: string]: unknown }>;
 		};
-		if (msg.role !== "assistant") return;
+		if (rawMsg.role !== "assistant") return;
 		const shaping = inFlightShaping.get(getSessionId(ctx));
-		let restored = msg;
-		if (shaping && Array.isArray(msg.content)) {
+		let restored = rawMsg;
+		if (shaping && Array.isArray(rawMsg.content)) {
 			let changed = false;
-			const content = msg.content.map((item) => {
+			const content = rawMsg.content.map((item) => {
 				if (item?.type !== "toolCall" || !item.name) return item;
 				const original = item.name;
 				const name = shaping.restoreToolName(original);
@@ -148,12 +149,23 @@ export default async function (pi: ExtensionAPI) {
 				return item;
 			});
 			if (changed) {
-				restored = { ...msg, content };
+				restored = { ...rawMsg, content };
 			}
 		}
+
+		if (
+			restored.stopReason === "error" &&
+			restored.provider === ZEN_PROVIDER_ID &&
+			restored.errorMessage &&
+			DEPRECATED_MODEL_REGEX.test(restored.errorMessage)
+		) {
+			const remaining = evictModel(restored.model);
+			registerProvider(pi, remaining);
+		}
+
 		const friendly = getZenFriendlyErrorMessage(restored, ZEN_PROVIDER_ID);
-		if (!friendly && restored === msg) return;
-		return { message: friendly ? { ...restored, errorMessage: friendly } : restored };
+		if (!friendly && restored === rawMsg) return;
+		return { message: (friendly ? { ...restored, errorMessage: friendly } : restored) as unknown as typeof event.message };
 	});
 
 	pi.on("session_before_compact", async (event, ctx) => {

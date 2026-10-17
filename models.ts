@@ -16,6 +16,7 @@ export const ZEN_PROVIDER_NAME = "OpenCode Zen (Free)";
 export const ZEN_ANONYMOUS_API_KEY = "public";
 export const ZEN_BASE_URL = process.env.ZEN_BASE_URL || "https://opencode.ai/inference/v1";
 export const FREE_MODELS_CDN_URL = "https://cdn.jsdelivr.net/gh/kerogenesis/omp-zen@data/free-models.json";
+export const ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 
 export const FREE_MODELS_CDN_TTL_MS = 3_600_000;
 const FETCH_TIMEOUT_MS = 8_000;
@@ -200,17 +201,47 @@ export function getCachedFreeModels(): FreeModelEntry[] {
 	return freeModelsCache?.models ?? [];
 }
 
+export async function fetchLiveZenModelIds(): Promise<Set<string> | null> {
+	try {
+		const res = await fetch(ZEN_MODELS_URL, {
+			headers: { "User-Agent": "Mozilla/5.0 (compatible; omp-zen/1.0)" },
+			signal: AbortSignal.timeout(3000),
+		});
+		if (!res.ok) return null;
+		const data = (await res.json()) as { data?: Array<{ id?: string }> };
+		if (!Array.isArray(data?.data)) return null;
+		return new Set(data.data.map((m) => m.id).filter(Boolean) as string[]);
+	} catch {
+		return null;
+	}
+}
+
+export function evictModel(modelId: string): ZenModelConfig[] {
+	const current = (lastKnownGoodModels && lastKnownGoodModels.length > 0 ? lastKnownGoodModels : knownModelsSync()).filter(
+		(m) => m.id !== modelId,
+	);
+	lastKnownGoodModels = current;
+	if (freeModelsCache) {
+		freeModelsCache.models = freeModelsCache.models.filter((m) => m.id !== modelId);
+	}
+	writeUserCache(current);
+	return current;
+}
+
 export function knownModelsSync(): ZenModelConfig[] {
 	if (lastKnownGoodModels && lastKnownGoodModels.length > 0) return lastKnownGoodModels;
-	const disk = readUserCache();
-	return disk.length > 0 ? disk : readBundledModels();
+	const bundled = readBundledModels();
+	const bundledIds = new Set(bundled.map((m) => m.id));
+	const disk = readUserCache().filter((m) => bundledIds.has(m.id));
+	return disk.length > 0 ? disk : bundled;
 }
 
 export async function resolveOrRecover(): Promise<ZenModelConfig[]> {
 	try {
-		const curated = await fetchFreeModelsList();
-		if (curated.length > 0) {
-			const configs = curated.map(fromFreeModelEntry);
+		const [curated, liveIds] = await Promise.all([fetchFreeModelsList(), fetchLiveZenModelIds()]);
+		const filtered = liveIds ? curated.filter((m) => liveIds.has(m.id)) : curated;
+		if (filtered.length > 0) {
+			const configs = filtered.map(fromFreeModelEntry);
 			lastKnownGoodModels = configs;
 			writeUserCache(configs);
 			return configs;

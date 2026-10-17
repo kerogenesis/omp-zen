@@ -23,6 +23,7 @@ const DOCS_URLS = [
 	"https://opencode.ai/docs/zen",
 ];
 const MODELS_DEV_URL = "https://models.dev/api.json";
+const ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OPENCODE_NPM_URL = "https://registry.npmjs.org/opencode-ai/latest";
 const INFERENCE_BASE = "https://opencode.ai/inference/v1";
 const FETCH_TIMEOUT_MS = 15_000;
@@ -167,18 +168,7 @@ function isFreeModel(entry) {
 	return /(^|\s)free$/i.test(entry.name ?? "");
 }
 
-const KNOWN_FREE_ALIASES = [
-	{
-		id: "muse-spark-1.2-contributor-free",
-		name: "Muse Spark 1.2 Free",
-		endpoint: "https://opencode.ai/inference/v1/responses",
-	},
-	{
-		id: "muse-spark-1.3-contributor-free",
-		name: "Muse Spark 1.3 Free",
-		endpoint: "https://opencode.ai/inference/v1/responses",
-	},
-];
+const KNOWN_FREE_ALIASES = [];
 
 // ─── Docs fetch with fallback ──────────────────────────────────────────────
 
@@ -224,11 +214,13 @@ function freeModelsFromDev(devSlice) {
 
 // ─── Enrich with models.dev metadata ─────────────────────────────────
 
-function enrichWithMetadata(freeIds, devSlice) {
+function enrichWithMetadata(freeIds, devSlice, liveZenIds) {
 	const models = [];
 
 	for (const entry of freeIds) {
 		const meta = devSlice[entry.id];
+		if (meta?.status === "deprecated") continue;
+		if (liveZenIds && !liveZenIds.has(entry.id)) continue;
 		const reasoning = meta?.reasoning === true;
 		const context = meta?.limit?.context;
 		const output = meta?.limit?.output;
@@ -307,7 +299,7 @@ function needsReasoningReplay(meta) {
  */
 function pickDefaultModel(models) {
 	if (models.length === 0) return null;
-
+	if (models.some((m) => m.id === "big-pickle")) return "big-pickle";
 	let best = null;
 	let bestScore = -Infinity;
 
@@ -394,7 +386,15 @@ async function main() {
 		console.error(`opencode version lookup failed: ${err.message} — omitting`);
 	}
 
-	let enriched = enrichWithMetadata(freeModels, devSlice);
+	let liveZenIds = null;
+	try {
+		const zenData = await fetchJSON(ZEN_MODELS_URL);
+		if (Array.isArray(zenData?.data)) {
+			liveZenIds = new Set(zenData.data.map((m) => m.id).filter(Boolean));
+		}
+	} catch {}
+
+	let enriched = enrichWithMetadata(freeModels, devSlice, liveZenIds);
 
 	// Apply disabled models from overrides
 	if (overrides.disabledModels.length > 0) {
