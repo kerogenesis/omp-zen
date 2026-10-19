@@ -1,6 +1,6 @@
 {
 	"$schema": "./free-models.schema.json",
-	"generatedAt": "2026-10-19T03:59:03.509Z",
+	"generatedAt": "2026-10-19T12:38:39.120Z",
 	"source": "https://opencode.ai/v2/docs/console/models/",
 	"count": 10,
 	"defaultModel": "big-pickle",
@@ -124,8 +124,8 @@
 			}
 		},
 		{
-			"id": "space-bunny-free",
-			"name": "Space Bunny Free",
+			"id": "minimax-m3.1-flash-free",
+			"name": "MiniMax M3.1 Flash Free",
 			"api": "openai-completions",
 			"endpoint": "https://opencode.ai/inference/openai/v1/chat/completions",
 			"reasoning": true,
@@ -148,8 +148,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1048576,
-			"maxTokens": 524288,
+			"contextWindow": 1000000,
+			"maxTokens": 512000,
 			"compat": {
 				"maxTokensField": "max_tokens",
 				"supportsStore": false,
