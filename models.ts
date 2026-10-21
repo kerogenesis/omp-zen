@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -76,34 +77,25 @@ export function readBundledModels(): ZenModelConfig[] {
 
 export function writeUserCache(models: ZenModelConfig[]): void {
 	try {
-		try {
-			const disk = JSON.parse(readFileSync(getUserCachePath(), "utf8")) as Snapshot;
-			if (
-				deepEqualJson(
-					disk.models.map((m) => ({ ...m, api: m.api ?? "openai-completions" })),
-					models.map((m) => ({ ...m, api: m.api ?? "openai-completions" })),
-				)
-			) {
-				return;
-			}
-		} catch {
-		}
+		const cachePath = getUserCachePath();
+		const current = readUserCache();
+		if (deepEqualJson(current, models)) return;
+
 		const dir = join(getAgentDir(), "cache");
 		mkdirSync(dir, { recursive: true });
 		const payload = JSON.stringify({ savedAt: Date.now(), models } satisfies Snapshot);
 		const tmp = join(dir, `pi-zen-models.json.${process.pid}.tmp`);
 		try {
 			writeFileSync(tmp, payload);
-			renameSync(tmp, getUserCachePath());
+			renameSync(tmp, cachePath);
 		} catch {
-			try {
-				writeFileSync(getUserCachePath(), payload);
-			} catch {}
+			writeFileSync(cachePath, payload);
 		}
 	} catch {}
 }
 
-export function getStoredKey(): string {
+export function getApiKey(): string {
+	if (process.env.ZEN_API_KEY) return process.env.ZEN_API_KEY;
 	try {
 		const auth = JSON.parse(readFileSync(join(getAgentDir(), "auth.json"), "utf8")) as Record<
 			string,
@@ -115,10 +107,6 @@ export function getStoredKey(): string {
 		}
 	} catch {}
 	return "";
-}
-
-export function getApiKey(): string {
-	return getStoredKey() || process.env.ZEN_API_KEY || "";
 }
 
 function storeFreeModelsResponse(res: Response): void {
@@ -255,17 +243,4 @@ export async function resolveOrRecover(): Promise<ZenModelConfig[]> {
 	return lastKnownGoodModels;
 }
 
-function canonicalJsonString(value: unknown): string {
-	if (Array.isArray(value)) return `[${value.map(canonicalJsonString).join(",")}]`;
-	if (typeof value === "object" && value !== null) {
-		const entries = Object.entries(value as Record<string, unknown>)
-			.filter(([, v]) => v !== undefined)
-			.sort(([k1], [k2]) => (k1 < k2 ? -1 : k1 > k2 ? 1 : 0));
-		return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJsonString(v)}`).join(",")}}`;
-	}
-	return JSON.stringify(value) ?? "null";
-}
-
-export function deepEqualJson(a: unknown, b: unknown): boolean {
-	return canonicalJsonString(a) === canonicalJsonString(b);
-}
+export const deepEqualJson = isDeepStrictEqual;

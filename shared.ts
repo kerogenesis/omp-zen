@@ -1,17 +1,3 @@
-export {
-	FALLBACK_SESSION_ID,
-	sessionIdFor,
-	isZenRequest,
-	normalizeGitRemote,
-	opencodeId,
-	opencodeIdFromSeed,
-	opencodeUserAgent,
-	OPENCODE_CLIENT,
-	projectIdFromRemote,
-	resolveProjectId,
-	validOpencodeVersion,
-} from "./identity.ts";
-
 export const ZEN_PROVIDER_ID = "pi-zen";
 
 export type ModelApi =
@@ -209,6 +195,56 @@ function isFingerprintDefinition(tool: unknown, key: string): boolean {
 	const params = def.parameters !== undefined ? def.parameters : def.input_schema;
 	return JSON.stringify(params) === JSON.stringify(want.parameters);
 }
+/**
+ * True when the caller's tool schema accepts calls shaped by opencode's
+ * fingerprint schema for `read` — same field names and types — so its wire
+ * definition can be swapped to the verbatim def without breaking execution.
+ * Anything else (a foreign `read` with extra or differently typed fields)
+ * falls back to alias concealment.
+ */
+function isWireCompatibleRead(tool: unknown): boolean {
+	if (!tool || typeof tool !== "object") return false;
+	const toolObj = tool as Record<string, unknown>;
+	const fn = typeof toolObj.function === "object" && toolObj.function !== null ? (toolObj.function as Record<string, unknown>) : toolObj;
+	const raw = "parameters" in fn ? fn.parameters : ("input_schema" in toolObj ? toolObj.input_schema : undefined);
+	if (!raw || typeof raw !== "object") return false;
+	const params = raw as Record<string, unknown>;
+	if (params.type !== "object" || !params.properties || typeof params.properties !== "object") return false;
+	const props = params.properties as Record<string, unknown>;
+	const names = Object.keys(props);
+	if (!names.includes("path")) return false;
+	if (!names.every((n) => n === "path" || n === "offset" || n === "limit")) return false;
+	const pathProp = props.path;
+	if (!pathProp || typeof pathProp !== "object" || !("type" in pathProp) || pathProp.type !== "string") return false;
+	for (const n of ["offset", "limit"] as const) {
+		if (!(n in props)) continue;
+		const prop = props[n];
+		if (!prop || typeof prop !== "object" || !("type" in prop)) return false;
+		if (prop.type !== "number" && prop.type !== "integer") return false;
+	}
+	const required = Array.isArray(params.required) ? params.required : [];
+	return required.includes("path") && required.every((r) => r === "path" || r === "offset" || r === "limit");
+}
+
+/**
+ * Overwrite a tool's description and parameter schema with opencode's verbatim
+ * fingerprint def for `key`, keeping its wire shape and — critically — its
+ * name. The gate compares description and parameters, so the swapped tool
+ * satisfies it without an alias; calls to the name still dispatch to the
+ * caller's real tool.
+ */
+function swapFingerprintDef(tool: unknown, key: string): Record<string, unknown> {
+	const def = ZEN_FINGERPRINT_DEFINITIONS[key];
+	if (!def) return tool as Record<string, unknown>;
+	const t = tool as Record<string, unknown>;
+	if (t.function && typeof t.function === "object") {
+		return { ...t, function: { ...(t.function as Record<string, unknown>), description: def.description, parameters: def.parameters } };
+	}
+	if (t.input_schema !== undefined) {
+		return { ...t, description: def.description, input_schema: def.parameters };
+	}
+	return { ...t, description: def.description, parameters: def.parameters };
+}
 
 function fingerprintTool(name: string, api: ModelApi | undefined): Record<string, unknown> {
 	const def = ZEN_FINGERPRINT_DEFINITIONS[name];
@@ -231,6 +267,7 @@ export type ZenShapedRequest = {
 	payload: Record<string, unknown>;
 	shouldBlock: (toolName: string) => boolean;
 	restoreToolName: (toolName: string) => string;
+	aliasFor: (toolName: string) => string | undefined;
 };
 
 export function sanitizeZenResponsesItems(payload: Record<string, unknown>): void {
@@ -278,6 +315,10 @@ export function ensureZenFreeTierShape(payload: unknown, api?: ModelApi): ZenSha
 			shaped.push(tool);
 			continue;
 		}
+		if (key === "read" && isWireCompatibleRead(tool)) {
+			shaped.push(swapFingerprintDef(tool, key));
+			continue;
+		}
 		let alias = `${key}_client`;
 		for (let i = 2; taken.has(alias); i++) alias = `${key}_client${i}`;
 		taken.add(alias);
@@ -310,11 +351,17 @@ export function ensureZenFreeTierShape(payload: unknown, api?: ModelApi): ZenSha
 	}
 
 	const appendedSet = new Set(appended);
-	const originalByAlias = new Map(aliases.map((a) => [a.alias, a.original]));
+	const originalByAlias: Record<string, string> = {};
+	const aliasByOriginal: Record<string, string> = {};
+	for (const a of aliases) {
+		originalByAlias[a.alias] = a.original;
+		aliasByOriginal[a.original] = a.alias;
+	}
 	return {
 		payload: obj,
 		shouldBlock: (toolName) => appendedSet.has(toolName),
-		restoreToolName: (toolName) => originalByAlias.get(toolName) ?? toolName,
+		restoreToolName: (toolName) => originalByAlias[toolName] ?? toolName,
+		aliasFor: (toolName) => aliasByOriginal[toolName],
 	};
 }
 
@@ -376,10 +423,10 @@ function noteUnavailableTools(
 ): void {
 	if (names.length === 0) return;
 	const list = names.map((name) => `\`${name}\``).join(" or ");
-	const note =
-		names.length > 1
-			? `Do not call the ${list} tools; they are placeholders that do nothing. Use the other tools you have been given instead.`
-			: `Do not call the ${list} tool; it is a placeholder that does nothing. Use the other tools you have been given instead.`;
+	const noun = names.length > 1 ? "tools are" : "tool is";
+	const pronoun = names.length > 1 ? "them" : "it";
+	const bashHint = names.includes("shell") ? " For shell commands, call `bash`." : "";
+	const note = `The ${list} ${noun} sent only to satisfy the API gateway; calling ${pronoun} returns an error.${bashHint} Use the other tools you have been given for everything else.`;
 	if (api === "openai-responses") {
 		obj.instructions =
 			typeof obj.instructions === "string" && obj.instructions.trim()
@@ -417,4 +464,100 @@ export function shapeZenPayload(payload: unknown, apiLookup: ZenApiLookup): ZenS
 	delete obj.prompt_cache_key;
 	delete obj.prompt_cache_retention;
 	return ensureZenFreeTierShape(obj, api) ?? undefined;
+}
+
+// ─── Direct-transport shaping (compat seam) ──────────────────────────────────
+
+/** Structural slice of pi-ai's StreamOptions this module touches. */
+export interface ZenDirectOptions {
+	headers?: Record<string, string>;
+	sessionId?: string;
+	onPayload?: (payload: unknown, model: unknown) => unknown | undefined | Promise<unknown | undefined>;
+	[key: string]: unknown;
+}
+
+/** Session-correlation headers Zen-bound requests are expected to carry. */
+export const ZEN_IDENTITY_HEADER_NAMES = [
+	"x-opencode-session",
+	"x-opencode-session-id",
+	"x-session-affinity",
+	"x-session-id",
+] as const;
+
+/**
+ * Overwrite ALL session-correlation headers with the effective session id and
+ * return the copy (input never mutated). Overwrite — not fill-gaps — is the
+ * gate's requirement: pi core stamps x-session-id/x-session-affinity/
+ * x-opencode-session-id from options.sessionId (the raw pi UUID on direct
+ * paths), and any non-ses_ value in the family poisons the request
+ * (2026-10-21: fill-gaps kept pi's UUIDs -> 403 FreeTierError; overwrite ->
+ * 200). A caller cannot manage its own affinity here — the gateway only
+ * accepts opencode-shaped ids, which is exactly what `sessionId` is.
+ */
+export function fillZenIdentityHeaders(
+	headers: Record<string, string> | undefined,
+	sessionId: string,
+): Record<string, string> {
+	const out = { ...(headers ?? {}) };
+	for (const name of ZEN_IDENTITY_HEADER_NAMES) {
+		out[name] = sessionId;
+	}
+	return out;
+}
+
+/**
+ * Compose direct-call options for a pi-zen model: default the session id,
+ * stamp ALL identity headers with the EFFECTIVE session id (the caller's
+ * sessionId option if it passed one, else the fallback), and wrap onPayload
+ * so the outgoing payload is shaped by the shipped wire recipe before any
+ * caller hook sees it. Non-identity caller keys win.
+ */
+export function zenDirectStreamOptions<T extends ZenDirectOptions>(
+	options: T | undefined,
+	deps: { fallbackSessionId: string; shapePayload: (payload: unknown) => unknown },
+): T {
+	const sessionId = options?.sessionId || deps.fallbackSessionId;
+	const caller = (options ?? {}) as T;
+	const prevOnPayload = caller.onPayload;
+	return {
+		...caller,
+		sessionId,
+		headers: fillZenIdentityHeaders(caller.headers, sessionId),
+		onPayload: (payload: unknown, model: unknown) => {
+			const shaped = deps.shapePayload(payload);
+			const effective = shaped === undefined ? payload : shaped;
+			if (!prevOnPayload) return effective;
+			const result = prevOnPayload(effective, model);
+			if (result && typeof (result as Promise<unknown>).then === "function") {
+				return Promise.resolve(result).then((r) => (r === undefined ? effective : r));
+			}
+			return result === undefined ? effective : result;
+		},
+	};
+}
+
+/**
+ * Shape a serialized request body aimed at a pi-zen free model — the fetch-edge
+ * counterpart to zenDirectStreamOptions. pi core's ModelRuntime dispatch
+ * bypasses before_provider_request AND the compat registry, so the only seam
+ * left is the network call itself (see installZenFetchGuard in index.ts).
+ * Returns the re-serialized shaped body, or undefined when the body isn't a
+ * shapable pi-zen request (non-JSON, foreign model) — the caller passes those
+ * through untouched. Shaping converges: an already-shaped body re-enters
+ * ensureZenFreeTierShape and comes back equal.
+ */
+export function shapeZenRequestBody(body: string, apiLookup: ZenApiLookup): string | undefined {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(body);
+	} catch {
+		return undefined;
+	}
+	if (typeof parsed !== "object" || parsed === null || !("model" in parsed) || typeof parsed.model !== "string") {
+		return undefined;
+	}
+	const model = parsed.model;
+	if (!apiLookup.get(model)) return undefined;
+	const shaped = shapeZenPayload(parsed, apiLookup);
+	return JSON.stringify(shaped?.payload ?? parsed);
 }

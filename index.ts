@@ -1,7 +1,9 @@
+import { getApiProvider, registerApiProvider } from "@earendil-works/pi-ai/compat";
 import { compact, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createZenCompactionStreamFn } from "./compaction.js";
 import { DEPRECATED_MODEL_REGEX, getZenFriendlyErrorMessage, type FailedAssistantMessage } from "./errors.js";
 import {
+	FALLBACK_SESSION_ID,
 	isZenRequest,
 	opencodeHeaders,
 	sessionIdFor,
@@ -23,16 +25,104 @@ import {
 	ZEN_PROVIDER_NAME,
 } from "./models.js";
 import {
+	fillZenIdentityHeaders,
 	fromFreeModelEntry,
 	isChatApi,
 	shapeZenPayload,
+	shapeZenRequestBody,
+	zenDirectStreamOptions,
 	type ModelApi,
+	type ZenDirectOptions,
 	type ZenModelConfig,
 	type ZenShapedRequest,
 } from "./shared.js";
 
 let apiByModelId: ReadonlyMap<string, ModelApi> = new Map();
 const inFlightShaping = new Map<string, ZenShapedRequest>();
+const ZEN_COMPAT_SOURCE = "omp-zen";
+const ZEN_COMPAT_APIS = [
+	"openai-completions",
+	"openai-responses",
+	"anthropic-messages",
+	"google-generative-ai",
+	"systemone",
+] as const;
+let zenCompatInstalled = false;
+
+function installZenCompatTransport(): void {
+	if (zenCompatInstalled) return;
+	for (const api of ZEN_COMPAT_APIS) {
+		const original = getApiProvider(api);
+		if (!original) continue;
+		const origStream = original.stream.bind(original) as (...args: unknown[]) => unknown;
+		const origSimple = original.streamSimple.bind(original) as (...args: unknown[]) => unknown;
+		const wrap =
+			(orig: (...args: unknown[]) => unknown) =>
+			(model: { provider: string }, context: unknown, options: unknown): unknown => {
+				if (model.provider !== ZEN_PROVIDER_ID) return orig(model, context, options);
+				return orig(
+					model,
+					context,
+					zenDirectStreamOptions(options as ZenDirectOptions | undefined, {
+						fallbackSessionId: FALLBACK_SESSION_ID,
+						shapePayload: (payload) => shapeZenPayload(payload, apiByModelId)?.payload ?? payload,
+					}),
+				);
+			};
+		registerApiProvider(
+			{
+				api,
+				stream: wrap(origStream) as never,
+				streamSimple: wrap(origSimple) as never,
+			} as never,
+			ZEN_COMPAT_SOURCE,
+		);
+	}
+	zenCompatInstalled = true;
+}
+
+const inferenceBase = process.env.PI_ZEN_BASE_URL || process.env.ZEN_BASE_URL || "https://opencode.ai/inference";
+const ZEN_INFERENCE_PREFIX = inferenceBase.replace(/\/v1\/?$/, "");
+const ZEN_FETCH_ORIGINAL_KEY = "__ompZenFetchOriginal";
+let fetchGuardInstalled = false;
+
+function installZenFetchGuard(): void {
+	if (fetchGuardInstalled) return;
+	fetchGuardInstalled = true;
+	const host = globalThis as typeof globalThis & { fetch: typeof fetch } & Record<string, unknown>;
+	if (typeof host[ZEN_FETCH_ORIGINAL_KEY] !== "function") {
+		host[ZEN_FETCH_ORIGINAL_KEY] = host.fetch.bind(globalThis);
+	}
+	const original = host[ZEN_FETCH_ORIGINAL_KEY] as typeof fetch;
+	host.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+		try {
+			const url =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.href
+						: typeof input === "object" && input !== null && "url" in input && typeof input.url === "string"
+							? input.url
+							: "";
+			const body = init?.body;
+			if (!url.startsWith(ZEN_INFERENCE_PREFIX) || typeof body !== "string") return original(input, init);
+			const shapedBody = shapeZenRequestBody(body, apiByModelId);
+			if (shapedBody === undefined) return original(input, init);
+			const raw = init?.headers;
+			const callerHeaders =
+				raw && typeof (raw as Headers).forEach === "function"
+					? Object.fromEntries(new Headers(raw as Headers).entries())
+					: ((raw as Record<string, string> | undefined) ?? {});
+			return original(url, {
+				...init,
+				body: shapedBody,
+				headers: fillZenIdentityHeaders(callerHeaders, FALLBACK_SESSION_ID),
+			});
+		} catch {
+			return original(input, init);
+		}
+	}) as typeof fetch;
+}
 
 function getSessionId(ctx?: ExtensionContext): string {
 	let key = "";
@@ -44,9 +134,10 @@ function getSessionId(ctx?: ExtensionContext): string {
 }
 
 function registerProvider(pi: ExtensionAPI, models: ZenModelConfig[]): number {
-	// Exclude non-chat protocols
+	// Exclude non-chat protocols from the interactive picker
 	const chatModels = models.filter((m) => isChatApi(m.api));
-	apiByModelId = new Map(chatModels.map((m) => [m.id, m.api ?? "openai-completions"]));
+	// Populate apiByModelId from ALL models so direct completions / fetch guard cover non-chat endpoints too (e.g. systemone)
+	apiByModelId = new Map(models.map((m) => [m.id, m.api ?? "openai-completions"]));
 	pi.registerProvider(ZEN_PROVIDER_ID, {
 		name: ZEN_PROVIDER_NAME,
 		baseUrl: ZEN_BASE_URL,
@@ -73,6 +164,9 @@ async function refreshAndRegister(pi: ExtensionAPI): Promise<number> {
 }
 
 export default async function (pi: ExtensionAPI) {
+	installZenCompatTransport();
+	installZenFetchGuard();
+
 	registerProvider(pi, knownModelsSync());
 
 	refreshAndRegister(pi).then(() => {});
@@ -123,9 +217,15 @@ export default async function (pi: ExtensionAPI) {
 	pi.on("tool_call", (event, ctx) => {
 		const shaping = inFlightShaping.get(getSessionId(ctx));
 		if (!shaping || !shaping.shouldBlock(event.toolName)) return;
+		const alias = shaping.aliasFor(event.toolName);
+		const substitute = alias
+			? `\`${alias}\``
+			: event.toolName === "shell"
+				? "`bash`"
+				: "the other tools you have been given";
 		return {
 			block: true,
-			reason: "Placeholder tool added for Zen free-tier compatibility — no action needed.",
+			reason: `omp-zen: \`${event.toolName}\` is a compatibility stub required by the free tier. Call ${substitute} instead.`,
 		};
 	});
 

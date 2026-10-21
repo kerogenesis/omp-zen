@@ -4,7 +4,6 @@ import { createHash, randomBytes } from "node:crypto";
 export const OPENCODE_CLIENT = "cli";
 export const OPENCODE_UA_CHANNEL = "latest";
 export const OPENCODE_UA_VERSION = "2.0.26";
-export const OPENCODE_UA_CLIENT = "cli";
 const ID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const ID_TIME_SHIFT = 0x1000n;
 
@@ -43,9 +42,8 @@ export function sessionIdFor(sessionId?: string): string {
 
 export const FALLBACK_SESSION_ID = sessionIdFor("");
 
-export function opencodeIdFromSeed(prefix: "ses" | "msg", seed: string): string {
-	const digest = createHash("sha1").update(seed).digest();
-	return `${prefix}_${formatIdBody(digest.subarray(0, 6), digest.subarray(6, 20))}`;
+export function opencodeUserAgent(version?: string): string {
+	return `opencode/${OPENCODE_UA_CHANNEL}/${validOpencodeVersion(version)}/${OPENCODE_CLIENT}`;
 }
 
 export function opencodeUserAgent(version?: string): string {
