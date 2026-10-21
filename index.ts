@@ -55,9 +55,6 @@ interface PiAiCompatModule {
 async function installZenCompatTransport(): Promise<void> {
 	if (zenCompatInstalled) return;
 	try {
-		// Static import of @earendil-works/pi-ai/compat breaks oh-my-pi (omp):
-		// omp remaps it to omp-legacy-pi-bundled:@oh-my-pi/pi-ai, which does not export getApiProvider.
-		// Dynamic import allows pi-ai compat wrapping in pi while safely no-oping in omp (where fetch guard handles direct calls).
 		const compat: PiAiCompatModule = await import("@earendil-works/pi-ai/compat");
 		if (typeof compat.getApiProvider !== "function" || typeof compat.registerApiProvider !== "function") {
 			return;
@@ -146,9 +143,7 @@ function getSessionId(ctx?: ExtensionContext): string {
 }
 
 function registerProvider(pi: ExtensionAPI, models: ZenModelConfig[]): number {
-	// Exclude non-chat protocols from the interactive picker
 	const chatModels = models.filter((m) => isChatApi(m.api));
-	// Populate apiByModelId from ALL models so direct completions / fetch guard cover non-chat endpoints too (e.g. systemone)
 	apiByModelId = new Map(models.map((m) => [m.id, m.api ?? "openai-completions"]));
 	pi.registerProvider(ZEN_PROVIDER_ID, {
 		name: ZEN_PROVIDER_NAME,
@@ -176,11 +171,9 @@ async function refreshAndRegister(pi: ExtensionAPI): Promise<number> {
 }
 
 export default async function (pi: ExtensionAPI) {
-	await installZenCompatTransport();
-	installZenFetchGuard();
-
 	registerProvider(pi, knownModelsSync());
-
+	installZenFetchGuard();
+	installZenCompatTransport().catch(() => {});
 	refreshAndRegister(pi).then(() => {});
 
 	setInterval(() => {
