@@ -1,4 +1,3 @@
-import { getApiProvider, registerApiProvider } from "@earendil-works/pi-ai/compat";
 import { compact, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createZenCompactionStreamFn } from "./compaction.js";
 import { DEPRECATED_MODEL_REGEX, getZenFriendlyErrorMessage, type FailedAssistantMessage } from "./errors.js";
@@ -48,37 +47,50 @@ const ZEN_COMPAT_APIS = [
 	"systemone",
 ] as const;
 let zenCompatInstalled = false;
+interface PiAiCompatModule {
+	getApiProvider?: (api: string) => { stream: Function; streamSimple: Function } | undefined;
+	registerApiProvider?: (provider: unknown, source: string) => void;
+}
 
-function installZenCompatTransport(): void {
+async function installZenCompatTransport(): Promise<void> {
 	if (zenCompatInstalled) return;
-	for (const api of ZEN_COMPAT_APIS) {
-		const original = getApiProvider(api);
-		if (!original) continue;
-		const origStream = original.stream.bind(original) as (...args: unknown[]) => unknown;
-		const origSimple = original.streamSimple.bind(original) as (...args: unknown[]) => unknown;
-		const wrap =
-			(orig: (...args: unknown[]) => unknown) =>
-			(model: { provider: string }, context: unknown, options: unknown): unknown => {
-				if (model.provider !== ZEN_PROVIDER_ID) return orig(model, context, options);
-				return orig(
-					model,
-					context,
-					zenDirectStreamOptions(options as ZenDirectOptions | undefined, {
-						fallbackSessionId: FALLBACK_SESSION_ID,
-						shapePayload: (payload) => shapeZenPayload(payload, apiByModelId)?.payload ?? payload,
-					}),
-				);
-			};
-		registerApiProvider(
-			{
-				api,
-				stream: wrap(origStream) as never,
-				streamSimple: wrap(origSimple) as never,
-			} as never,
-			ZEN_COMPAT_SOURCE,
-		);
-	}
-	zenCompatInstalled = true;
+	try {
+		// Static import of @earendil-works/pi-ai/compat breaks oh-my-pi (omp):
+		// omp remaps it to omp-legacy-pi-bundled:@oh-my-pi/pi-ai, which does not export getApiProvider.
+		// Dynamic import allows pi-ai compat wrapping in pi while safely no-oping in omp (where fetch guard handles direct calls).
+		const compat: PiAiCompatModule = await import("@earendil-works/pi-ai/compat");
+		if (typeof compat.getApiProvider !== "function" || typeof compat.registerApiProvider !== "function") {
+			return;
+		}
+		for (const api of ZEN_COMPAT_APIS) {
+			const original = compat.getApiProvider(api);
+			if (!original) continue;
+			const origStream = original.stream.bind(original) as (...args: unknown[]) => unknown;
+			const origSimple = original.streamSimple.bind(original) as (...args: unknown[]) => unknown;
+			const wrap =
+				(orig: (...args: unknown[]) => unknown) =>
+				(model: { provider: string }, context: unknown, options: unknown): unknown => {
+					if (model.provider !== ZEN_PROVIDER_ID) return orig(model, context, options);
+					return orig(
+						model,
+						context,
+						zenDirectStreamOptions(options as ZenDirectOptions | undefined, {
+							fallbackSessionId: FALLBACK_SESSION_ID,
+							shapePayload: (payload) => shapeZenPayload(payload, apiByModelId)?.payload ?? payload,
+						}),
+					);
+				};
+			compat.registerApiProvider(
+				{
+					api,
+					stream: wrap(origStream) as never,
+					streamSimple: wrap(origSimple) as never,
+				} as never,
+				ZEN_COMPAT_SOURCE,
+			);
+		}
+		zenCompatInstalled = true;
+	} catch {}
 }
 
 const inferenceBase = process.env.PI_ZEN_BASE_URL || process.env.ZEN_BASE_URL || "https://opencode.ai/inference";
@@ -164,7 +176,7 @@ async function refreshAndRegister(pi: ExtensionAPI): Promise<number> {
 }
 
 export default async function (pi: ExtensionAPI) {
-	installZenCompatTransport();
+	await installZenCompatTransport();
 	installZenFetchGuard();
 
 	registerProvider(pi, knownModelsSync());
