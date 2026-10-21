@@ -46,10 +46,6 @@ export function opencodeUserAgent(version?: string): string {
 	return `opencode/${OPENCODE_UA_CHANNEL}/${validOpencodeVersion(version)}/${OPENCODE_CLIENT}`;
 }
 
-export function opencodeUserAgent(version?: string): string {
-	return `opencode/${OPENCODE_UA_CHANNEL}/${validOpencodeVersion(version)}/${OPENCODE_UA_CLIENT}`;
-}
-
 export function validOpencodeVersion(version?: string): string {
 	const m = String(version ?? "").trim().match(/^(\d+)\.\d+\.\d+/);
 	if (m && Number.parseInt(m[1] ?? "", 10) >= 2) return m[0] ?? OPENCODE_UA_VERSION;
