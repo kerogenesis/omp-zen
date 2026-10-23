@@ -47,9 +47,15 @@ export let currentOpencodeVersion = "2.0.26";
 
 export function getAgentDir(): string {
 	if (process.env.PI_CODING_AGENT_DIR) return process.env.PI_CODING_AGENT_DIR;
+	if (process.env.OMPCODE || process.env.OMP_DIR) {
+		const base = process.env.OMP_DIR || join(homedir(), ".omp");
+		return join(base, "agent");
+	}
+	const piDir = join(homedir(), ".pi", "agent");
+	if (existsSync(piDir)) return piDir;
 	const ompDir = join(homedir(), ".omp", "agent");
 	if (existsSync(ompDir)) return ompDir;
-	return join(homedir(), ".pi", "agent");
+	return piDir;
 }
 
 function getUserCachePath(): string {
