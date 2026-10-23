@@ -24,7 +24,9 @@ const DOCS_URLS = [
 ];
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
-const OPENCODE_NPM_URL = "https://registry.npmjs.org/opencode-ai/latest";
+// opencode renamed its npm package: opencode-ai is frozen at 1.19.4,
+// @opencode/cli is the live one. Query the encoded scoped name.
+const OPENCODE_NPM_URL = "https://registry.npmjs.org/@opencode%2fcli/latest";
 const INFERENCE_BASE = "https://opencode.ai/inference/v1";
 const FETCH_TIMEOUT_MS = 15_000;
 

@@ -69,6 +69,7 @@ export function readBundledModels(): ZenModelConfig[] {
 	try {
 		const snapshotPath = join(import.meta.dirname || ".", "free-models.json");
 		const file = JSON.parse(readFileSync(snapshotPath, "utf8")) as FreeModelsFile;
+		if (file?.opencodeVersion) currentOpencodeVersion = validOpencodeVersion(file.opencodeVersion);
 		return Array.isArray(file?.models) ? file.models.map(fromFreeModelEntry) : [];
 	} catch {
 		return [];
