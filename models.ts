@@ -1,7 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { validOpencodeVersion } from "./identity.js";
 import {
 	fromFreeModelEntry,
@@ -73,7 +74,8 @@ export function readUserCache(): ZenModelConfig[] {
 
 export function readBundledModels(): ZenModelConfig[] {
 	try {
-		const snapshotPath = join(import.meta.dirname || ".", "free-models.json");
+		const moduleDir = typeof import.meta.dirname === "string" ? import.meta.dirname : dirname(fileURLToPath(import.meta.url));
+		const snapshotPath = join(moduleDir, "free-models.json");
 		const file = JSON.parse(readFileSync(snapshotPath, "utf8")) as FreeModelsFile;
 		if (file?.opencodeVersion) currentOpencodeVersion = validOpencodeVersion(file.opencodeVersion);
 		return Array.isArray(file?.models) ? file.models.map(fromFreeModelEntry) : [];

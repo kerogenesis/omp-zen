@@ -336,6 +336,7 @@ export function ensureZenFreeTierShape(payload: unknown, api?: ModelApi): ZenSha
 	obj.tools = shaped;
 
 	noteUnavailableTools(obj, api, appended);
+	ensureZenEnvBlock(obj, api);
 
 	if (aliases.length > 0) {
 		retargetZenToolChoice(obj, aliases);
@@ -447,6 +448,47 @@ function noteUnavailableTools(
 		obj.messages = [{ role: "system", content: note }, ...(obj.messages as unknown[])];
 	}
 }
+function ensureZenEnvBlock(obj: Record<string, unknown>, api: ModelApi | undefined): void {
+	const cwd = process.cwd().replace(/\\/g, "/");
+	const harnessHeader = "You are an AI agent running in OpenCode, a coding agent harness. Help the user accomplish their goals using the tools you have available.";
+	const envBlock = `<env>\n  Working directory: ${cwd}\n</env>`;
+	if (api === "openai-responses") {
+		let inst = typeof obj.instructions === "string" ? obj.instructions : "";
+		if (!inst.includes("You are an AI agent running in OpenCode")) {
+			inst = inst ? `${harnessHeader}\n\n${inst}` : harnessHeader;
+		}
+		if (!inst.includes("<env>") || !inst.includes("Working directory:")) {
+			inst = `${inst}\n\n${envBlock}`;
+		}
+		obj.instructions = inst;
+		return;
+	}
+	if (api === "anthropic-messages") {
+		let sys = typeof obj.system === "string" ? obj.system : "";
+		if (!sys.includes("You are an AI agent running in OpenCode")) {
+			sys = sys ? `${harnessHeader}\n\n${sys}` : harnessHeader;
+		}
+		if (!sys.includes("<env>") || !sys.includes("Working directory:")) {
+			sys = `${sys}\n\n${envBlock}`;
+		}
+		obj.system = sys;
+		return;
+	}
+	if (!Array.isArray(obj.messages)) return;
+	const first = obj.messages[0] as { role?: unknown; content?: unknown } | undefined;
+	if (first?.role === "system" && typeof first.content === "string") {
+		let content = first.content;
+		if (!content.includes("You are an AI agent running in OpenCode")) {
+			content = `${harnessHeader}\n\n${content}`;
+		}
+		if (!content.includes("<env>") || !content.includes("Working directory:")) {
+			content = `${content}\n\n${envBlock}`;
+		}
+		obj.messages = [{ ...first, content }, ...obj.messages.slice(1)];
+	} else {
+		obj.messages = [{ role: "system", content: `${harnessHeader}\n\n${envBlock}` }, ...(obj.messages as unknown[])];
+	}
+}
 
 export type ZenApiLookup = Pick<Map<string, ModelApi>, "get">;
 
@@ -456,15 +498,16 @@ export function shapeZenPayload(payload: unknown, apiLookup: ZenApiLookup): ZenS
 	const modelId = typeof obj.model === "string" ? obj.model : undefined;
 	if (!modelId) return undefined;
 
-	const api =
-		apiLookup.get(modelId) ??
-		(modelId.includes("/") ? apiLookup.get(modelId.split("/").slice(1).join("/")) : undefined);
+	const normalizedModel = modelId.includes("/") ? modelId.split("/").slice(1).join("/") : modelId;
+	const api = apiLookup.get(modelId) ?? apiLookup.get(normalizedModel);
 	if (!api) return undefined;
 
+	obj.model = normalizedModel;
 	delete obj.prompt_cache_key;
 	delete obj.prompt_cache_retention;
 	return ensureZenFreeTierShape(obj, api) ?? undefined;
 }
+
 
 // ─── Direct-transport shaping (compat seam) ──────────────────────────────────
 
@@ -556,8 +599,10 @@ export function shapeZenRequestBody(body: string, apiLookup: ZenApiLookup): stri
 	if (typeof parsed !== "object" || parsed === null || !("model" in parsed) || typeof parsed.model !== "string") {
 		return undefined;
 	}
-	const model = parsed.model;
-	if (!apiLookup.get(model)) return undefined;
+	const rawModel = parsed.model;
+	const modelId = rawModel.includes("/") ? rawModel.split("/").slice(1).join("/") : rawModel;
+	if (!apiLookup.get(rawModel) && !apiLookup.get(modelId)) return undefined;
+	parsed.model = modelId;
 	const shaped = shapeZenPayload(parsed, apiLookup);
 	return JSON.stringify(shaped?.payload ?? parsed);
 }

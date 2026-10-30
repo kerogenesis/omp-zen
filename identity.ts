@@ -31,16 +31,21 @@ export function opencodeId(
 
 const sessionIds = new Map<string, string>();
 
+export function freshSessionId(): string {
+	const counter = Math.floor(Math.random() * 50) + 1;
+	return opencodeId("ses", Date.now(), counter, randomBytes(14));
+}
+
 export function sessionIdFor(sessionId?: string): string {
-	const key = sessionId || "";
-	const cached = sessionIds.get(key);
+	if (!sessionId) return freshSessionId();
+	const cached = sessionIds.get(sessionId);
 	if (cached) return cached;
-	const id = opencodeId("ses", Date.now(), 0, randomBytes(14));
-	sessionIds.set(key, id);
+	const id = freshSessionId();
+	sessionIds.set(sessionId, id);
 	return id;
 }
 
-export const FALLBACK_SESSION_ID = sessionIdFor("");
+export const FALLBACK_SESSION_ID = freshSessionId();
 
 export function opencodeUserAgent(version?: string): string {
 	return `opencode/${OPENCODE_UA_CHANNEL}/${validOpencodeVersion(version)}/${OPENCODE_CLIENT}`;
@@ -113,6 +118,6 @@ export function opencodeHeaders(version?: string): Record<string, string> {
 		"User-Agent": opencodeUserAgent(version),
 		"x-opencode-client": OPENCODE_CLIENT,
 		"x-opencode-project": resolveProjectId(),
-		"x-opencode-session": FALLBACK_SESSION_ID,
+		"x-opencode-session": freshSessionId(),
 	};
 }

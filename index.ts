@@ -3,6 +3,7 @@ import { createZenCompactionStreamFn } from "./compaction.js";
 import { DEPRECATED_MODEL_REGEX, getZenFriendlyErrorMessage, type FailedAssistantMessage } from "./errors.js";
 import {
 	FALLBACK_SESSION_ID,
+	freshSessionId,
 	isZenRequest,
 	opencodeHeaders,
 	sessionIdFor,
@@ -72,7 +73,7 @@ async function installZenCompatTransport(): Promise<void> {
 						model,
 						context,
 						zenDirectStreamOptions(options as ZenDirectOptions | undefined, {
-							fallbackSessionId: FALLBACK_SESSION_ID,
+							fallbackSessionId: freshSessionId(),
 							shapePayload: (payload) => shapeZenPayload(payload, apiByModelId)?.payload ?? payload,
 						}),
 					);
@@ -122,10 +123,22 @@ function installZenFetchGuard(): void {
 				raw && typeof (raw as Headers).forEach === "function"
 					? Object.fromEntries(new Headers(raw as Headers).entries())
 					: ((raw as Record<string, string> | undefined) ?? {});
+			const callerSession =
+				callerHeaders["x-opencode-session"] ||
+				callerHeaders["x-opencode-session-id"] ||
+				callerHeaders["x-session-affinity"] ||
+				callerHeaders["x-session-id"];
+			const effectiveSession =
+				callerSession && callerSession.startsWith("ses_")
+					? callerSession
+					: sessionIdFor(callerSession);
 			return original(url, {
 				...init,
 				body: shapedBody,
-				headers: fillZenIdentityHeaders(callerHeaders, FALLBACK_SESSION_ID),
+				headers: {
+					...opencodeHeaders(currentOpencodeVersion),
+					...fillZenIdentityHeaders(callerHeaders, effectiveSession),
+				},
 			});
 		} catch {
 			return original(input, init);
