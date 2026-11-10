@@ -1,8 +1,8 @@
 {
 	"$schema": "./free-models.schema.json",
-	"generatedAt": "2026-11-09T15:41:29.290Z",
+	"generatedAt": "2026-11-10T01:20:06.578Z",
 	"source": "https://opencode.ai/v2/docs/console/models/",
-	"count": 12,
+	"count": 11,
 	"defaultModel": "big-pickle",
 	"opencodeVersion": "2.2.6",
 	"models": [
@@ -92,35 +92,6 @@
 				"supportsUsageInStreaming": false,
 				"requiresReasoningContentOnAssistantMessages": true
 			}
-		},
-		{
-			"id": "crouton-alpha-free",
-			"name": "Crouton Alpha Free",
-			"api": "openai-responses",
-			"endpoint": "https://opencode.ai/inference/openai/v1/responses",
-			"reasoning": true,
-			"thinkingLevelMap": {
-				"off": null,
-				"minimal": "minimal",
-				"low": "low",
-				"medium": "medium",
-				"high": "high",
-				"xhigh": "xhigh",
-				"max": "max"
-			},
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1048576,
-			"maxTokens": 270000,
-			"compat": {}
 		},
 		{
 			"id": "glm-5.3-flash-free",
