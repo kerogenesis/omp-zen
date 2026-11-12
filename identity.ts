@@ -32,7 +32,9 @@ export function opencodeId(
 const sessionIds = new Map<string, string>();
 
 export function freshSessionId(): string {
-	const counter = Math.floor(Math.random() * 50) + 1;
+	// Real OpenCode sessions use a small per-process counter; the gateway
+	// only accepts IDs whose low 12 bits map back to a value below 16.
+	const counter = Math.floor(Math.random() * 15) + 1;
 	return opencodeId("ses", Date.now(), counter, randomBytes(14));
 }
 

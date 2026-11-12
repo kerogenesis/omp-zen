@@ -1,3 +1,7 @@
+import { existsSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
 export const ZEN_PROVIDER_ID = "pi-zen";
 
 export type ModelApi =
@@ -448,19 +452,69 @@ function noteUnavailableTools(
 		obj.messages = [{ role: "system", content: note }, ...(obj.messages as unknown[])];
 	}
 }
+function resolveExistingPath(path: string): string {
+	try {
+		// `.native` returns long names on Windows; plain realpathSync can leave 8.3 paths.
+		return realpathSync.native(path);
+	} catch {
+		return path;
+	}
+}
+
+/** Walks up from the working directory to the nearest repository root. */
+function zenWorkspaceRoot(cwd: string): string {
+	let dir = cwd;
+	for (;;) {
+		if (existsSync(join(dir, ".git"))) return resolveExistingPath(dir);
+		const parent = dirname(dir);
+		if (parent === dir) return cwd;
+		dir = parent;
+	}
+}
+
+/**
+ * The environment block OpenCode 2.2.x sends in its system prompt. Zen's free
+ * gate fingerprints it, so omp has to reproduce it verbatim.
+ */
+export function zenEnvironmentBlock(): string {
+	const cwd = resolveExistingPath(process.cwd());
+	const root = zenWorkspaceRoot(cwd);
+	const tmp = resolveExistingPath(join(tmpdir(), "opencode"));
+	return [
+		"Here is some useful information about the environment you are running in:",
+		"<env>",
+		`  Working directory: ${cwd}`,
+		`  Workspace root folder: ${root}`,
+		`  Is directory a git repo: ${root === cwd && !existsSync(join(cwd, ".git")) ? "no" : "yes"}`,
+		`  Platform: ${process.platform}`,
+		`  Prefer ${tmp} over generic system temporary directories such as /tmp; it is pre-created and approved for external access.`,
+		"</env>",
+	].join("\n");
+}
+
+const ENV_BLOCK_REGEX = /<env>[\s\S]*?<\/env>/g;
+
+/** Replaces a partial `<env>` block (or appends the full block) in a prompt. */
+export function withZenEnvBlock(text: string): string {
+	const block = zenEnvironmentBlock();
+	let replaced = false;
+	const result = text.replace(ENV_BLOCK_REGEX, (match) => {
+		if (replaced || !match.includes("Working directory:")) return match;
+		replaced = true;
+		return block;
+	});
+	if (replaced) return result;
+	return text ? `${text}\n\n${block}` : block;
+}
+
 function ensureZenEnvBlock(obj: Record<string, unknown>, api: ModelApi | undefined): void {
-	const cwd = process.cwd().replace(/\\/g, "/");
 	const harnessHeader = "You are an AI agent running in OpenCode, a coding agent harness. Help the user accomplish their goals using the tools you have available.";
-	const envBlock = `<env>\n  Working directory: ${cwd}\n</env>`;
 	if (api === "openai-responses") {
 		let inst = typeof obj.instructions === "string" ? obj.instructions : "";
 		if (!inst.includes("You are an AI agent running in OpenCode")) {
 			inst = inst ? `${harnessHeader}\n\n${inst}` : harnessHeader;
 		}
-		if (!inst.includes("<env>") || !inst.includes("Working directory:")) {
-			inst = `${inst}\n\n${envBlock}`;
-		}
-		obj.instructions = inst;
+		obj.instructions = withZenEnvBlock(inst);
 		return;
 	}
 	if (api === "anthropic-messages") {
@@ -468,10 +522,7 @@ function ensureZenEnvBlock(obj: Record<string, unknown>, api: ModelApi | undefin
 		if (!sys.includes("You are an AI agent running in OpenCode")) {
 			sys = sys ? `${harnessHeader}\n\n${sys}` : harnessHeader;
 		}
-		if (!sys.includes("<env>") || !sys.includes("Working directory:")) {
-			sys = `${sys}\n\n${envBlock}`;
-		}
-		obj.system = sys;
+		obj.system = withZenEnvBlock(sys);
 		return;
 	}
 	if (!Array.isArray(obj.messages)) return;
@@ -481,12 +532,12 @@ function ensureZenEnvBlock(obj: Record<string, unknown>, api: ModelApi | undefin
 		if (!content.includes("You are an AI agent running in OpenCode")) {
 			content = `${harnessHeader}\n\n${content}`;
 		}
-		if (!content.includes("<env>") || !content.includes("Working directory:")) {
-			content = `${content}\n\n${envBlock}`;
-		}
-		obj.messages = [{ ...first, content }, ...obj.messages.slice(1)];
+		obj.messages = [{ ...first, content: withZenEnvBlock(content) }, ...obj.messages.slice(1)];
 	} else {
-		obj.messages = [{ role: "system", content: `${harnessHeader}\n\n${envBlock}` }, ...(obj.messages as unknown[])];
+		obj.messages = [
+			{ role: "system", content: `${harnessHeader}\n\n${zenEnvironmentBlock()}` },
+			...(obj.messages as unknown[]),
+		];
 	}
 }
 
