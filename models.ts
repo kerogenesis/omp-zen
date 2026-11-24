@@ -228,8 +228,7 @@ export function evictModel(modelId: string): ZenModelConfig[] {
 export function knownModelsSync(): ZenModelConfig[] {
 	if (lastKnownGoodModels && lastKnownGoodModels.length > 0) return lastKnownGoodModels;
 	const bundled = readBundledModels();
-	const bundledIds = new Set(bundled.map((m) => m.id));
-	const disk = readUserCache().filter((m) => bundledIds.has(m.id));
+	const disk = readUserCache();
 	return disk.length > 0 ? disk : bundled;
 }
 
