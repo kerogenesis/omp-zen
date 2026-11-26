@@ -1,10 +1,10 @@
 {
 	"$schema": "./free-models.schema.json",
-	"generatedAt": "2026-11-25T21:24:05.533Z",
+	"generatedAt": "2026-11-26T07:37:49.386Z",
 	"source": "https://opencode.ai/v2/docs/console/models/",
 	"count": 11,
 	"defaultModel": "big-pickle",
-	"opencodeVersion": "2.4.1",
+	"opencodeVersion": "2.4.2",
 	"models": [
 		{
 			"id": "jev-1.13-free",
@@ -52,8 +52,8 @@
 			}
 		},
 		{
-			"id": "tidepool-alpha-free",
-			"name": "Tidepool Alpha Free",
+			"id": "seaglass-alpha-free",
+			"name": "Seaglass Alpha Free",
 			"api": "openai-completions",
 			"endpoint": "https://opencode.ai/inference/openai/v1/chat/completions",
 			"reasoning": true,
